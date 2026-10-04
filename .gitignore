@@ -1,0 +1,40 @@
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+build/
+dist/
+*.egg-info/
+
+# Environments
+.venv/
+env/
+venv/
+ENV/
+
+# Sensitive environment credentials
+.env
+*.env
+!*.env.example
+
+# Browser automation profiles & dumps
+.onluyen-browser-profile/
+gemini_dump.html
+debug_prompt.txt
+
+# Screenshots & run artifacts
+*.png
+*.jpg
+*.jpeg
+*.log
+
+# IDE & OS
+.vscode/
+.idea/
+.DS_Store
+Thumbs.db
+
+# Scratch and internal agent artifacts
+ECC/
+.agents/

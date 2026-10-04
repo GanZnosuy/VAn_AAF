@@ -1,0 +1,22 @@
+[project]
+name = "autoedu-agent"
+version = "1.0.0"
+description = "Hệ thống tự động giải bài tập và đề thi trực tuyến kết hợp Playwright & Gemini Web AI"
+readme = "README.md"
+authors = [{ name = "Vuong & Antigravity" }]
+requires-python = ">=3.11"
+dependencies = [
+    "browser-use>=0.13.10",
+    "curl-cffi>=0.16.3",
+    "gemini-webapi>=1.6.1",
+    "playwright>=1.40.0",
+    "python-dotenv>=1.0.0",
+    "pydantic>=2.0.0"
+]
+
+[project.scripts]
+autoedu = "cli:main"
+
+[build-system]
+requires = ["setuptools>=61.0"]
+build-backend = "setuptools.build_meta"
