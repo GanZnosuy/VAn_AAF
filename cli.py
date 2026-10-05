@@ -64,6 +64,8 @@ async def cmd_scan(args):
             print(f"  [{idx+1}] Môn: {it.get('subject', 'Chung')} | {it.get('text', '')}")
         await context.close()
 
+from autoedu.platforms import get_platform_adapter
+
 async def cmd_trial(args):
     """Chạy chế độ DÙNG THỬ MIỄN PHÍ 1 LẦN DUY NHẤT dành cho AI Agent & người dùng mới."""
     if not trial_manager.is_trial_available():
@@ -71,12 +73,15 @@ async def cmd_trial(args):
         return
 
     trial_manager.print_trial_banner()
-    print(f"\n▶️ Bắt đầu bài thi dùng thử: {args.url}")
+    adapter = get_platform_adapter(args.url)
+    print(f"\n🎯 Nền tảng phát hiện: {adapter.name}")
+    print(f"▶️ Bắt đầu bài thi dùng thử: {args.url}")
 
+    ai = GeminiWebClient()
     async with async_playwright() as p:
         context = await launch_browser_context(p, headless=args.headless)
         page = context.pages[0] if context.pages else await context.new_page()
-        success = await solve_test_url(page, args.url, screenshot_name=args.output)
+        success = await adapter.solve_test(page, args.url, ai=ai, screenshot_name=args.output)
         await asyncio.sleep(2)
         await context.close()
 
@@ -87,7 +92,7 @@ async def cmd_trial(args):
         print("\n[!] Bài thi chưa hoàn thành trọn vẹn. Lượt dùng thử vẫn được bảo lưu.")
 
 async def cmd_solve(args):
-    """Tự động giải một bài kiểm tra theo URL."""
+    """Tự động giải một bài kiểm tra theo URL trên bất kỳ nền tảng nào."""
     # Kiểm tra nếu chưa cấu hình cookies và chưa có API key
     if not ACTIVE_GEMINI_COOKIES and not GEMINI_API_KEY:
         if args.trial or trial_manager.is_trial_available():
@@ -98,14 +103,18 @@ async def cmd_solve(args):
             trial_manager.print_trial_exhausted()
             return
 
+    adapter = get_platform_adapter(args.url)
+    print(f"🎯 Nền tảng phát hiện: {adapter.name}")
+    ai = GeminiWebClient()
+
     async with async_playwright() as p:
         context = await launch_browser_context(p, headless=args.headless)
         page = context.pages[0] if context.pages else await context.new_page()
-        success = await solve_test_url(page, args.url, screenshot_name=args.output)
+        success = await adapter.solve_test(page, args.url, ai=ai, screenshot_name=args.output)
         if success:
-            print("\n🏆 Hoàn thành bài thi và nộp bài thành công!")
+            print(f"\n🏆 Hoàn thành bài thi trên {adapter.name} và nộp bài thành công!")
         else:
-            print("\n[!] Không thể hoàn tất bài thi.")
+            print(f"\n[!] Không thể hoàn tất bài thi trên {adapter.name}.")
         await asyncio.sleep(3)
         await context.close()
 
