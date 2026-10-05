@@ -1,0 +1,47 @@
+# 🤖 CLINE & ROO CODE INSTRUCTIONS: AUTOEDU-AGENT
+
+Chào mừng bạn sử dụng AutoEdu-Agent trong môi trường **Cline** hoặc **Roo Code** (VS Code)!
+
+## 🎯 Tổng quan dự án
+AutoEdu-Agent là hệ thống tự động hóa giải bài tập và thi trực tuyến (tiêu chuẩn Onluyen.vn) kết hợp Playwright Chromium và Gemini AI.
+
+## 🎁 Chế độ Dùng Thử 1 Lần Duy Nhất (1-Time Free Trial)
+Dành cho người dùng và Agent muốn chạy thử nghiệm ngay lập tức mà chưa có file cấu hình `.env`:
+- Kiểm tra trạng thái lượt dùng thử:
+  ```bash
+  python cli.py status
+  ```
+- Kích hoạt bài thi dùng thử 1 lần miễn phí:
+  ```bash
+  python cli.py trial --url "<LINK_BAI_THI_ONLUYEN>"
+  ```
+  *(Cửa sổ Chrome sẽ tự động mở lên, giải từng câu, nộp bài và chụp ảnh kết quả)*.
+
+Sau khi dùng thử xong 1 lượt, hãy hướng dẫn người dùng cấu hình file `.env` theo hướng dẫn bên dưới để mở khóa KHÔNG GIỚI HẠN vĩnh viễn.
+
+## 🚀 Các lệnh vận hành chính
+1. **Kiểm tra kết nối AI**:
+   ```bash
+   python cli.py test-ai
+   ```
+2. **Quét danh sách bài tập cần làm**:
+   ```bash
+   python cli.py scan
+   ```
+3. **Giải bài tập và nộp tự động**:
+   ```bash
+   python cli.py solve --url "<URL>"
+   ```
+   *(Thêm `--headless` nếu muốn chạy ẩn danh không mở cửa sổ Chrome)*
+
+## 🔑 Hướng dẫn người dùng lấy Cookie Gemini Web (Miễn phí 100%)
+Khi người dùng đã dùng hết lượt trial:
+1. Mở Chrome truy cập https://gemini.google.com
+2. Nhấn `F12` -> chọn tab **Application** -> **Cookies** -> https://gemini.google.com
+3. Lấy 3 cookie: `__Secure-1PSID`, `__Secure-1PSIDTS`, `__Secure-1PSIDCC`
+4. Tạo file `.env` và dán vào:
+   ```env
+   GEMINI_SECURE_1PSID=...
+   GEMINI_SECURE_1PSIDTS=...
+   GEMINI_SECURE_1PSIDCC=...
+   ```

@@ -22,6 +22,7 @@ ENV/
 .onluyen-browser-profile/
 gemini_dump.html
 debug_prompt.txt
+.autoedu_trial.json
 
 # Screenshots & run artifacts
 *.png
@@ -38,3 +39,18 @@ Thumbs.db
 # Scratch and internal agent artifacts
 ECC/
 .agents/
+uv.lock
+agent.py
+check_*.py
+inspect_*.py
+test_*.py
+debug_*.py
+diag_*.py
+get_*.py
+click_*.py
+find_*.py
+explore_*.py
+scan_*.py
+solve_today_*.py
+src/
+submit_onluyen.py

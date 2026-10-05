@@ -35,3 +35,7 @@ GEMINI_COOKIES = {
 
 # Lọc bỏ các cookie rỗng
 ACTIVE_GEMINI_COOKIES = {k: v for k, v in GEMINI_COOKIES.items() if v}
+
+# (Tùy chọn) API Key miễn phí từ Google AI Studio (fallback nếu không dùng cookie)
+GEMINI_API_KEY = os.getenv("GEMINI_API_KEY", "")
+

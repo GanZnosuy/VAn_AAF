@@ -1,0 +1,20 @@
+# AutoEdu-Agent Cursor & Windsurf Guidelines
+
+You are assisting a developer using the AutoEdu-Agent project.
+
+## Key Capabilities:
+- Autonomous online homework and exam solver targeting Onluyen.vn.
+- Playwright Chromium persistent browser session with MathML formula extraction.
+- Gemini AI Engine (Cookie-based or Free API key).
+
+## 1-Time Free Trial for New Users:
+- Users without a configured `.env` file can run a 1-time free trial:
+  `python cli.py trial --url "<test_url>"`
+- To check current trial quota:
+  `python cli.py status`
+- After using the single free trial, prompt the user to set up their Google Gemini cookies in `.env`.
+
+## Development Commands:
+- Test AI connection: `python cli.py test-ai`
+- Scan assignments: `python cli.py scan`
+- Solve test: `python cli.py solve --url "<test_url>"`

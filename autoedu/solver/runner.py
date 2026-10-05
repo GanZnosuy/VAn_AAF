@@ -25,11 +25,13 @@ async def solve_test_url(
     await asyncio.sleep(2)
     await auto_login_if_needed(page)
 
-    # 1. Nhấn nút Bắt đầu nếu đang ở trang giới thiệu
-    start_btn = await page.query_selector(".btn-test.green, div:has-text('Bắt đầu'), button:has-text('Bắt đầu')")
-    if start_btn:
-        print("▶️ Bấm nút Bắt đầu bài thi...")
-        await start_btn.click()
+    # 1. Nhấn nút Bắt đầu nếu đang ở trang giới thiệu và chưa có lưới câu hỏi
+    has_grid = await page.query_selector(".grid .option")
+    if not has_grid:
+        start_btn = await page.query_selector(".btn-test.green, button:has-text('Bắt đầu'), button:has-text('Làm bài'), button:has-text('Tiếp tục'), .btn:has-text('Tiếp tục')")
+        if start_btn:
+            print("▶️ Bấm nút Bắt đầu/Tiếp tục làm bài...")
+            await start_btn.click()
 
     # 2. Đợi danh sách câu hỏi xuất hiện
     try:
@@ -79,19 +81,20 @@ async def solve_test_url(
 
         await asyncio.sleep(0.8)
 
-        # Kiểm tra xác nhận lưu đáp án
-        is_done = await page.evaluate(f"""num => {{
-            const items = document.querySelectorAll('.grid .option');
-            for (const item of items) {{
-                if (item.innerText.trim() === String(num)) return item.classList.contains('done');
-            }}
-            return false;
-        }}""", q_num)
-
-        if not is_done:
-            print(f"[!] Câu {q_num} chưa có nhãn 'done', bấm lại TRẢ LỜI...")
+        # Kiểm tra xác nhận lưu đáp án (thử tối đa 2 lần)
+        for retry in range(2):
+            is_done = await page.evaluate(f"""num => {{
+                const items = document.querySelectorAll('.grid .option');
+                for (const item of items) {{
+                    if (item.innerText.trim() === String(num)) return item.classList.contains('done');
+                }}
+                return false;
+            }}""", q_num)
+            if is_done:
+                break
+            print(f"[!] Câu {q_num} chưa có nhãn 'done', bấm lại TRẢ LỜI (lần {retry+1})...")
             await click_tra_loi_btn(page)
-            await asyncio.sleep(1)
+            await asyncio.sleep(1.2)
 
     print("\n" + "=" * 65)
     print("🎉 HOÀN THÀNH TOÀN BỘ CÂU HỎI! TIẾN HÀNH NỘP BÀI...")
@@ -114,10 +117,11 @@ async def solve_test_url(
                 print("[✓] Đã bấm nút nộp bài!")
 
         await asyncio.sleep(5)
-        close_dialog = await page.query_selector(".modal button:has-text('Xác nhận'), button:has-text('Đóng')")
+        close_dialog = await page.query_selector(".modal button:has-text('Xác nhận'), button:has-text('Đóng'), button:has-text('Xem kết quả')")
         if close_dialog:
             try:
                 await close_dialog.click()
+                await asyncio.sleep(2)
             except Exception:
                 pass
 

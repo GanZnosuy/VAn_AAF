@@ -1,0 +1,28 @@
+{
+  "$schema": "https://opencode.ai/config.schema.json",
+  "name": "AutoEdu-Agent",
+  "description": "Autonomous online exam and homework solver for Onluyen.vn using Playwright and Gemini AI",
+  "version": "1.0.0",
+  "commands": {
+    "status": {
+      "cmd": "python cli.py status",
+      "description": "Kiểm tra trạng thái cấu hình và lượt dùng thử Free Trial (1/1)"
+    },
+    "test-ai": {
+      "cmd": "python cli.py test-ai",
+      "description": "Kiểm tra kết nối và trích xuất token Gemini AI"
+    },
+    "scan": {
+      "cmd": "python cli.py scan",
+      "description": "Quét danh sách bài tập đang giao trên Onluyen"
+    },
+    "trial": {
+      "cmd": "python cli.py trial --url",
+      "description": "Chạy chế độ Dùng Thử 1 Lần Duy Nhất (không cần .env)"
+    },
+    "solve": {
+      "cmd": "python cli.py solve --url",
+      "description": "Tự động giải và nộp bài kiểm tra theo URL"
+    }
+  }
+}
