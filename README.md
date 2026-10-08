@@ -228,8 +228,6 @@ Dự án cung cấp sẵn cấu hình cho mọi nền tảng Agent phổ biến:
 - **Cline & Roo Code**: Đã có sẵn [`.clinerules`](.clinerules). Bạn chỉ cần mở VS Code và ra lệnh cho Cline: `"Hãy quét bài tập trên Onluyen và làm giúp tôi"`.
 - **OpenCode**: Đã có sẵn [`opencode.json`](opencode.json). Hỗ trợ trực tiếp các lệnh `status`, `scan`, `trial`, `solve`.
 - **Google Antigravity / Claude Code**: Đã có sẵn [`skills/autoedu-solver/SKILL.md`](skills/autoedu-solver/SKILL.md) và [`CLAUDE.md`](CLAUDE.md).
-- **Cursor & Windsurf**: Đã có sẵn [`.cursorrules`](.cursorrules).
-
 ---
 
 ## 🌙 Tự Động Hóa Hẹn Giờ 22:00 Hàng Ngày & Thông Báo Mobile
