@@ -232,6 +232,34 @@ Dự án cung cấp sẵn cấu hình cho mọi nền tảng Agent phổ biến:
 
 ---
 
+## 🌙 Tự Động Hóa Hẹn Giờ 22:00 Hàng Ngày & Thông Báo Mobile
+
+Hệ thống hỗ trợ tự động rà soát và giải bài tập về nhà mỗi đêm với cơ chế chạy ngầm (Headless) và báo cáo kết quả:
+
+### 1. Kích hoạt bộ hẹn giờ tự động
+```bash
+# Chạy trực tiếp 1 lần để kiểm tra
+python auto_nightly_worker.py
+
+# Hoặc cài đặt tự động vào Windows Task Scheduler chạy 22:00 mỗi tối:
+powershell -ExecutionPolicy Bypass -File cai_dat_hen_gio_10h_toi.ps1
+```
+* **Tính năng:**
+  - `WakeToRun`: Tự động đánh thức máy từ chế độ Sleep.
+  - `StartWhenAvailable`: Chạy bù ngay khi bật máy nếu lúc 22:00 máy đang tắt.
+
+### 2. Gửi thông báo & bảng điểm về Discord / Telegram
+- **Discord:** Cấu hình `DISCORD_WEBHOOK_URL` trong `.env`. Hệ thống sẽ tự động chụp ảnh màn hình bảng điểm và gửi Rich Embed card về kênh Discord trên điện thoại.
+- **Telegram:** Cấu hình `TELEGRAM_BOT_TOKEN` và `TELEGRAM_CHAT_ID` trong `.env`. Hỗ trợ bot tương tác 2 chiều (`/status`, `/homework`).
+
+### 3. Theo dõi tiến trình từ xa qua điện thoại (Live Monitor)
+```bash
+python antigravity_mobile_monitor.py
+```
+Mở trình duyệt điện thoại truy cập `http://<IP_MAY_TINH>:7860` để xem trạng thái thời gian thực.
+
+---
+
 ## 📜 Giấy Phép & Tuyên Bố Miễn Trừ Trách Nhiệm
 
 - Dự án phát hành theo giấy phép [MIT License](LICENSE).

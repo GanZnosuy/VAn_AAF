@@ -32,6 +32,13 @@ async def solve_test_url(
         if start_btn:
             print("▶️ Bấm nút Bắt đầu/Tiếp tục làm bài...")
             await start_btn.click()
+            await asyncio.sleep(2)
+
+            modal_btn = await page.query_selector(".modal button:has-text('Bắt đầu'), .modal button:has-text('Làm bài'), .modal button:has-text('Tiếp tục'), button:has-text('Bắt đầu làm bài')")
+            if modal_btn:
+                print("▶️ Bấm nút xác nhận trong modal...")
+                await modal_btn.click()
+                await asyncio.sleep(2)
 
     # 2. Đợi danh sách câu hỏi xuất hiện
     try:

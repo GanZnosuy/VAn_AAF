@@ -54,3 +54,12 @@ scan_*.py
 solve_today_*.py
 src/
 submit_onluyen.py
+
+# Unrelated presentation & handbook artifacts
+*.pptx
+*asean*
+*tsa*
+*handbook*
+research_skills/
+scan_results.json
+tsa_casio_images/
