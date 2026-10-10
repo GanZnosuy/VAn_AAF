@@ -7,7 +7,12 @@ from datetime import datetime
 from pathlib import Path
 from playwright.async_api import async_playwright
 from telegram_notifier import send_telegram_message, send_telegram_photo
-from discord_notifier import send_discord_message, send_discord_photo
+from discord_notifier import (
+    send_discord_message,
+    send_discord_photo,
+    notify_task_completed,
+    notify_interrupted_or_disconnected
+)
 
 if sys.platform == "win32":
     try:
@@ -53,7 +58,7 @@ def send_windows_notification(title: str, message: str):
     except Exception as e:
         logging.warning(f"Không thể gửi Windows Notification: {e}")
 
-async def run_nightly_job(headless: bool = True):
+async def _execute_nightly_job(headless: bool = True):
     """Tiến trình kiểm tra và tự động giải bài tập đêm."""
     now_str = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
     logging.info(f"==================================================")
@@ -199,23 +204,48 @@ async def run_nightly_job(headless: bool = True):
                     solved_count += 1
                     solved_titles.append(title)
                     img_candidate = f"{screenshot_path}.png"
+                    details_list = [
+                        f"Môn học / Tiêu đề: {title}",
+                        f"Đường dẫn bài thi: {target_url}",
+                        f"Trạng thái: Đã giải trọn vẹn 100% câu hỏi và nộp bài thành công"
+                    ]
+                    files_list = [img_candidate] if os.path.exists(img_candidate) else None
+
+                    notify_task_completed(
+                        task_title=f"Đã giải xong: {title}",
+                        task_description="Hệ thống AutoEdu đã tự động giải bài và nộp thành công lên Onluyen.vn!",
+                        details=details_list,
+                        files_affected=files_list,
+                        photo_path=img_candidate if os.path.exists(img_candidate) else None
+                    )
+
                     if os.path.exists(img_candidate):
                         send_telegram_photo(img_candidate, caption=f"✅ <b>Đã giải xong:</b> {title}")
-                        send_discord_photo(img_candidate, title=f"✅ Đã giải xong: {title}", description="Đã hoàn thành và tự động nộp bài trên Onluyen.vn!", color=0x57F287)
                     else:
                         send_telegram_message(f"✅ <b>Đã giải xong:</b> {title}")
-                        send_discord_message(embeds=[{
-                            "title": f"✅ Đã giải xong: {title}",
-                            "description": "Đã hoàn thành và tự động nộp bài trên Onluyen.vn!",
-                            "color": 0x57F287,
-                            "timestamp": datetime.utcnow().isoformat() + "Z"
-                        }])
                 else:
                     logging.warning(f"⚠️ Chưa hoàn thành trọn vẹn: {title}")
                     failed_count += 1
+                    notify_interrupted_or_disconnected(
+                        task_name=f"Giải bài tập: {title}",
+                        reason="Không thể hoàn tất toàn bộ câu hỏi hoặc nút Nộp bài không khả dụng",
+                        last_action=f"Đang làm bài tại URL: {target_url}",
+                        error_message="Quá trình nộp bài hoặc nhận diện câu hỏi bị dừng trước khi hoàn tất.",
+                        recovery_hint="Kiểm tra lại bài tập trên Onluyen.vn xem bài có bị khóa hoặc hết hạn nộp hay không."
+                    )
             except Exception as e:
                 logging.error(f"❌ Lỗi ngoại lệ khi giải {title}: {e}")
                 failed_count += 1
+                err_str = str(e)
+                is_disconnect = any(k in err_str.lower() for k in ["connection", "timeout", "network", "disconnected", "target closed", "net::err", "closed"])
+                reason_str = "Mất kết nối Internet hoặc trình duyệt bị ngắt giữa chừng" if is_disconnect else "Lỗi ngoại lệ trong quá trình tự động làm bài"
+                notify_interrupted_or_disconnected(
+                    task_name=f"Giải bài tập: {title}",
+                    reason=reason_str,
+                    last_action=f"Đang tương tác với bài tập tại URL: {target_url}",
+                    error_message=err_str,
+                    recovery_hint="Kiểm tra đường truyền Internet của máy chủ/máy tính hoặc khởi động lại tiến trình."
+                )
 
             # Quay lại trang danh sách bài tập nếu còn bài tiếp theo
             if idx < total_pending:
@@ -235,12 +265,38 @@ async def run_nightly_job(headless: bool = True):
         notif_msg += f" ({', '.join(solved_titles[:2])})"
     send_windows_notification("AutoEdu - Hoàn thành bài tập", notif_msg)
     send_telegram_message(f"🎉 <b>TỔNG KẾT BÀI TẬP ĐÊM:</b>\n\n{notif_msg}")
-    send_discord_message(embeds=[{
-        "title": "🎉 TỔNG KẾT BÀI TẬP ĐÊM",
-        "description": notif_msg,
-        "color": 0xFEE75C,
-        "timestamp": datetime.utcnow().isoformat() + "Z"
-    }])
+
+    summary_details = [
+        f"Tổng số bài tập phát hiện: {total_pending} bài",
+        f"Số bài giải thành công: {solved_count} bài",
+        f"Số bài gặp sự cố hoặc chưa xong: {failed_count} bài"
+    ]
+    if solved_titles:
+        summary_details.append(f"Danh sách bài đã giải: {', '.join(solved_titles)}")
+
+    notify_task_completed(
+        task_title="Tổng kết phiên giải bài tập đêm Onluyen.vn",
+        task_description=notif_msg,
+        details=summary_details,
+        color=0xFEE75C if failed_count > 0 else 0x57F287
+    )
+
+async def run_nightly_job(headless: bool = True):
+    """Bọc tiến trình giải bài đêm với cơ chế phát hiện ngắt kết nối / crash đột ngột."""
+    try:
+        await _execute_nightly_job(headless=headless)
+    except Exception as e:
+        err_str = str(e)
+        logging.error(f"🚨 TIẾN TRÌNH QUÉT BÀI BỊ GIÁN ĐOẠN ĐỘT NGỘT: {err_str}")
+        is_net = any(k in err_str.lower() for k in ["connection", "timeout", "network", "disconnected", "target closed", "net::err", "refused", "offline", "dns"])
+        notify_interrupted_or_disconnected(
+            task_name="Tiến trình AutoEdu Nightly Solver",
+            reason="Mất kết nối Internet hoặc trình duyệt bị ngắt giữa chừng" if is_net else "Sự cố crash tiến trình ngoài dự kiến",
+            last_action="Đang thực hiện phiên quét bài tập đêm",
+            error_message=err_str,
+            recovery_hint="Kiểm tra lại kết nối mạng của máy chủ/máy tính hoặc khởi động lại tiến trình."
+        )
+        raise
 
 if __name__ == "__main__":
     import argparse
