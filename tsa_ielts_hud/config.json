@@ -1,0 +1,17 @@
+{
+  "active_profile": "TSA_MODE",
+  "cdp_url": "http://localhost:9222",
+  "guess_threshold_sec": 12,
+  "low_end_pc_mode": true,
+  "time_sink_thresholds": {
+    "TSA_MODE": 140,
+    "YOUPASS_READING": 85,
+    "STUDY4_READING": 85,
+    "IELTS_LISTENING": 60,
+    "IELTS_WRITING": 300
+  },
+  "passage_pacing_alerts": {
+    "passage_1_max_min": 15,
+    "passage_2_cumulative_max_min": 35
+  }
+}

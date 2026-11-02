@@ -8,7 +8,7 @@ $scriptPath = Join-Path $projectDir "auto_nightly_worker.py"
 $logPath = Join-Path $projectDir "logs\nightly_solver.log"
 
 Write-Host "======================================================================" -ForegroundColor Cyan
-Write-Host "THIET LAP TU DONG LAM BAI TAP VE NHA LUC 22:00 HANG NGAY" -ForegroundColor Yellow
+Write-Host "THIET LAP TU DONG LAM BAI TAP VE NHA LUC 12:30 TRUA HANG NGAY" -ForegroundColor Yellow
 Write-Host "======================================================================" -ForegroundColor Cyan
 
 # 1. Kiem tra file script
@@ -21,12 +21,12 @@ if (-not (Test-Path $scriptPath)) {
 $actionArgs = "-NoProfile -WindowStyle Hidden -ExecutionPolicy Bypass -Command `"Set-Location '$projectDir'; uv run python '$scriptPath'`""
 $action = New-ScheduledTaskAction -Execute "powershell.exe" -Argument $actionArgs -WorkingDirectory $projectDir
 
-# 3. Dinh nghia Trigger: 22:00 hang ngay
-$trigger = New-ScheduledTaskTrigger -Daily -At "10:00PM"
+# 3. Dinh nghia Trigger: 12:30 trua hang ngay
+$trigger = New-ScheduledTaskTrigger -Daily -At "12:30PM"
 
 # 4. Dinh nghia Cai dat nang cao:
 # - WakeToRun: Danh thuc may neu dang Sleep
-# - StartWhenAvailable: Neu 10h toi tat may, khi bat may se tu dong chay bu ngay
+# - StartWhenAvailable: Neu 12h30 trua tat may, khi bat may se tu dong chay bu ngay
 $settings = New-ScheduledTaskSettingsSet `
     -AllowStartIfOnBatteries `
     -DontStopIfGoingOnBatteries `
@@ -43,13 +43,13 @@ try {
         -Action $action `
         -Trigger $trigger `
         -Settings $settings `
-        -Description "Tu dong kiem tra va giai bai tap tren Onluyen.vn luc 22:00 hang ngay" | Out-Null
+        -Description "Tu dong kiem tra va giai bai tap tren Onluyen.vn luc 12:30 trua hang ngay" | Out-Null
 
     Write-Host "`n[v] DA CAI DAT THANH CONG TAC VU VAO WINDOWS TASK SCHEDULER!" -ForegroundColor Green
     Write-Host "    - Ten tac vu:   $taskName" -ForegroundColor White
-    Write-Host "    - Lich chay:    Dung 22:00 (10:00 PM) moi toi" -ForegroundColor White
+    Write-Host "    - Lich chay:    Dung 12:30 (12:30 PM) trua hang ngay" -ForegroundColor White
     Write-Host "    - Co che:       Chay ngam (Headless), khong hien cua so che man hinh" -ForegroundColor White
-    Write-Host "    - Chay bu:      Co (Tu dong chay ngay khi mo may neu luc 22:00 tat may)" -ForegroundColor White
+    Write-Host "    - Chay bu:      Co (Tu dong chay ngay khi mo may neu luc 12:30 tat may)" -ForegroundColor White
     Write-Host "    - Danh thuc:    Co (Tu danh thuc may tinh neu dang o che do Sleep)" -ForegroundColor White
     Write-Host "    - Nhat ky luu:  $logPath" -ForegroundColor Gray
 

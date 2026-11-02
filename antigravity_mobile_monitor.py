@@ -306,6 +306,15 @@ h1 { font-size: 18px; font-weight: 700; color: #fff; letter-spacing: -0.3px; }
   </div>
 
 <script>
+function escapeHtml(str) {
+  return String(str || '')
+    .replace(/&/g, '&amp;')
+    .replace(/</g, '&lt;')
+    .replace(/>/g, '&gt;')
+    .replace(/"/g, '&quot;')
+    .replace(/'/g, '&#39;');
+}
+
 async function updateData() {
   try {
     const res = await fetch('/api/status');
@@ -315,7 +324,7 @@ async function updateData() {
     
     // Status badge
     const badge = document.getElementById('status-badge');
-    badge.className = 'badge-status badge-' + data.status;
+    badge.className = 'badge-status badge-' + escapeHtml(data.status);
     badge.innerText = data.status === 'WORKING' ? '⚡ ĐANG LÀM VIỆC' : (data.status === 'THINKING' ? '💭 ĐANG SUY NGHĨ' : '💤 ĐANG CHỜ LỆNH');
     
     document.getElementById('current-task').innerText = data.last_action;
@@ -327,9 +336,9 @@ async function updateData() {
     if (data.recent_tools && data.recent_tools.length > 0) {
       toolsContainer.innerHTML = data.recent_tools.map(t => `
         <div class="item-card">
-          <div class="tool-tag">${t.name}</div>
-          <div class="tool-desc">${t.desc}</div>
-          <div class="tool-time">Bước #${t.step} • ${(t.time || '').substring(11, 19)}</div>
+          <div class="tool-tag">${escapeHtml(t.name)}</div>
+          <div class="tool-desc">${escapeHtml(t.desc)}</div>
+          <div class="tool-time">Bước #${escapeHtml(t.step)} • ${escapeHtml((t.time || '').substring(11, 19))}</div>
         </div>
       `).join('');
     } else {
@@ -339,7 +348,7 @@ async function updateData() {
     // Homework logs
     const hwLogs = document.getElementById('hw-logs');
     if (data.homework_logs && data.homework_logs.length > 0) {
-      hwLogs.innerHTML = data.homework_logs.map(l => `<div class="log-line">${l}</div>`).join('');
+      hwLogs.innerHTML = data.homework_logs.map(l => `<div class="log-line">${escapeHtml(l)}</div>`).join('');
     } else {
       hwLogs.innerHTML = '<div style="color:#64748b;">Chưa có phiên quét bài đêm</div>';
     }
@@ -349,8 +358,8 @@ async function updateData() {
     if (data.artifacts && data.artifacts.length > 0) {
       artContainer.innerHTML = data.artifacts.map(a => `
         <div class="item-card" style="display:flex; justify-content:space-between; align-items:center;">
-          <span style="font-weight:600; color:#38bdf8; font-size:12px;">${a.name}</span>
-          <span style="color:#64748b; font-size:11px;">${a.size} • ${a.time}</span>
+          <span style="font-weight:600; color:#38bdf8; font-size:12px;">${escapeHtml(a.name)}</span>
+          <span style="color:#64748b; font-size:11px;">${escapeHtml(a.size)} • ${escapeHtml(a.time)}</span>
         </div>
       `).join('');
     } else {
@@ -376,13 +385,16 @@ class RequestHandler(BaseHTTPRequestHandler):
             content = json.dumps(data, ensure_ascii=False).encode("utf-8")
             self.send_response(200)
             self.send_header("Content-Type", "application/json; charset=utf-8")
-            self.send_header("Access-Control-Allow-Origin", "*")
+            self.send_header("X-Content-Type-Options", "nosniff")
+            self.send_header("X-Frame-Options", "DENY")
             self.end_headers()
             self.wfile.write(content)
         else:
             content = HTML_TEMPLATE.encode("utf-8")
             self.send_response(200)
             self.send_header("Content-Type", "text/html; charset=utf-8")
+            self.send_header("X-Content-Type-Options", "nosniff")
+            self.send_header("X-Frame-Options", "DENY")
             self.end_headers()
             self.wfile.write(content)
 

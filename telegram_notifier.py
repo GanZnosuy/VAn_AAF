@@ -66,7 +66,8 @@ def send_telegram_message(text: str, parse_mode: str = "HTML") -> bool:
             res_data = json.loads(resp.read().decode("utf-8"))
             return res_data.get("ok", False)
     except Exception as e:
-        print(f"[!] Loi gui tin nhan Telegram: {e}")
+        err_msg = str(e).replace(bot_token, "***REDACTED_TOKEN***") if bot_token else str(e)
+        print(f"[!] Loi gui tin nhan Telegram: {err_msg}")
         return False
 
 def send_telegram_photo(photo_path: str, caption: str = "") -> bool:
@@ -126,7 +127,8 @@ def send_telegram_photo(photo_path: str, caption: str = "") -> bool:
             res_data = json.loads(resp.read().decode("utf-8"))
             return res_data.get("ok", False)
     except Exception as e:
-        print(f"[!] Loi gui anh Telegram: {e}")
+        err_msg = str(e).replace(bot_token, "***REDACTED_TOKEN***") if bot_token else str(e)
+        print(f"[!] Loi gui anh Telegram: {err_msg}")
         return False
 
 def test_telegram_connection() -> bool:

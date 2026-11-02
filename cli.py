@@ -16,6 +16,7 @@ from autoedu.browser.navigator import scan_assignments
 from autoedu.solver.runner import solve_test_url
 from autoedu.trial import TrialManager
 from autoedu.config import ACTIVE_GEMINI_COOKIES, GEMINI_API_KEY
+from autoedu.platforms import get_platform_adapter, LanguageExamAdapter
 
 trial_manager = TrialManager()
 
@@ -64,8 +65,6 @@ async def cmd_scan(args):
             print(f"  [{idx+1}] Môn: {it.get('subject', 'Chung')} | {it.get('text', '')}")
         await context.close()
 
-from autoedu.platforms import get_platform_adapter
-
 async def cmd_trial(args):
     """Chạy chế độ DÙNG THỬ MIỄN PHÍ 1 LẦN DUY NHẤT dành cho AI Agent & người dùng mới."""
     if not trial_manager.is_trial_available():
@@ -93,9 +92,15 @@ async def cmd_trial(args):
 
 async def cmd_solve(args):
     """Tự động giải một bài kiểm tra theo URL trên bất kỳ nền tảng nào."""
+    if getattr(args, "reset_session", False):
+        sess_file = "session_progress.json"
+        if os.path.exists(sess_file):
+            os.remove(sess_file)
+            print("🔄 [SessionManager] Đã làm mới session_progress.json")
+
     # Kiểm tra nếu chưa cấu hình cookies và chưa có API key
     if not ACTIVE_GEMINI_COOKIES and not GEMINI_API_KEY:
-        if args.trial or trial_manager.is_trial_available():
+        if getattr(args, "trial", False) or trial_manager.is_trial_available():
             print("[*] Phát hiện chưa cấu hình .env -> Tự động chuyển sang Chế độ Dùng Thử 1 Lần...")
             await cmd_trial(args)
             return
@@ -136,14 +141,15 @@ def main():
     p_trial = subparsers.add_parser("trial", help="Chế độ DÙNG THỬ 1 LẦN DUY NHẤT dành cho Cline, Antigravity, OpenCode")
     p_trial.add_argument("--url", required=True, help="URL bài thi Onluyen")
     p_trial.add_argument("--headless", action="store_true", help="Chạy ẩn danh")
-    p_trial.add_argument("--output", default="ket_qua_dung_thu", help="Tên file ảnh kết quả")
+    p_trial.add_argument("--output", default="ket_qua_dung_thu.png", help="Tên file ảnh kết quả")
 
     # solve
-    p_solve = subparsers.add_parser("solve", help="Giải bài kiểm tra theo URL")
-    p_solve.add_argument("--url", required=True, help="URL bài thi (ví dụ: https://app.onluyen.vn/school/test/...)")
+    p_solve = subparsers.add_parser("solve", help="Giải bài kiểm tra theo URL (Onluyen, STUDY4, YouPass, Canvas, Moodle...)")
+    p_solve.add_argument("--url", required=True, help="URL bài thi")
     p_solve.add_argument("--headless", action="store_true", help="Chạy ẩn danh")
     p_solve.add_argument("--trial", action="store_true", help="Kích hoạt dưới chế độ dùng thử")
-    p_solve.add_argument("--output", default="ket_qua_bai_thi", help="Tên file ảnh chụp kết quả")
+    p_solve.add_argument("--reset-session", action="store_true", help="Làm mới tiến trình session_progress.json")
+    p_solve.add_argument("--output", default="ket_qua_bai_thi.png", help="Tên file ảnh chụp kết quả")
 
     args = parser.parse_args()
     if not args.command:

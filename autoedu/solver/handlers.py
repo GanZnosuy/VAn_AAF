@@ -57,11 +57,11 @@ async def handle_true_false(page: Page, q_num: int, data: dict, ai: GeminiWebCli
     await click_tra_loi_btn(page)
 
 async def handle_short_answer(page: Page, q_num: int, data: dict, ai: GeminiWebClient):
-    """Xử lý câu trả lời ngắn / điền số."""
+    """Xử lý câu trả lời ngắn / điền số hoặc điền từ vựng."""
     prompt = format_short_answer_prompt(data["question"])
     res = await ai.query(prompt)
     raw_val = parse_short_answer(res)
-    print(f"   [AI] Điền số: {raw_val}")
+    print(f"   [AI] Điền đáp án: {raw_val}")
 
     ans_input = await page.query_selector("input[id^='mathplay-answer'], .step-content input[type='text'], input.can-resize-second")
     if ans_input:

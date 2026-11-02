@@ -60,8 +60,25 @@ JS_EXTRACTOR_SCRIPT = """() => {
         return text;
     }
 
+    // 1. Kiểm tra bài đọc hiểu / đoạn văn chung (Reading Comprehension / Cloze Test trên Onluyen)
+    let passagePrefix = '';
+    const passageEl = document.querySelector(
+        '.question-passage, .reading-passage, .passage-content, .reading-text, ' +
+        '.passage, .stimulus, [class*="passage"], [class*="reading-content"], .parent-content, .question-context, .content-group'
+    );
+    if (passageEl) {
+        const pt = getCleanText(passageEl);
+        if (pt && pt.length > 25) {
+            passagePrefix = '[BÀI ĐỌC / ĐOẠN VĂN]:\\n' + pt + '\\n\\n';
+        }
+    }
+
     const qName = document.querySelector('.question-name') || document.querySelector('.question-title') || document.querySelector('.step-content');
-    const questionText = getCleanText(qName);
+    let questionText = getCleanText(qName);
+    if (passagePrefix && !questionText.includes(passagePrefix.substring(25, 60))) {
+        questionText = passagePrefix + '[CÂU HỎI]:\\n' + questionText;
+    }
+
     const opts = Array.from(document.querySelectorAll('.question-option')).map(o => getCleanText(o));
     
     // Tìm các câu khẳng định Đúng/Sai

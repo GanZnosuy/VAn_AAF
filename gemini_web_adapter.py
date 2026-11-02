@@ -71,9 +71,11 @@ class ChatGeminiWeb(BaseChatModel):
         secure_1psid: str | None = None,
         secure_1psidts: str | None = None,
         secure_1psidcc: str | None = None,
-        model: str = "gemini-web"
+        model: str = "gemini-4-argon",
+        thinking_level: str = "high"
     ):
         self.model = model
+        self.thinking_level = thinking_level
         
         # Nếu không truyền vào thì nạp tự động từ cấu hình toàn cục
         loaded = load_global_cookies()

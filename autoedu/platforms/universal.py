@@ -5,12 +5,14 @@ from playwright.async_api import Page
 from autoedu.platforms.base import BasePlatformAdapter
 from autoedu.ai.gemini_web import GeminiWebClient
 from autoedu.ai.prompts import format_choice_prompt, parse_choice_answer, format_short_answer_prompt, parse_short_answer
+from autoedu.extractor.dual_pane_extractor import DualPaneExtractor
 
 class UniversalAdapter(BasePlatformAdapter):
     """
     Adapter Vạn Năng (Universal Web Exam Solver)
     Tự động phân tích cây DOM tổng quát để giải bài thi trên MỌI trang web giáo dục:
-    (OLM.vn, VnEdu, Submoi, VietJack, Quizizz, Microsoft Forms, và các web trường học khác).
+    (OLM.vn, VnEdu, Submoi, VietJack, Quizizz, Microsoft Forms, Canvas, Moodle và các web trường học khác).
+    Tự động kích hoạt Dual-Pane Linguistic Runner nếu phát hiện layout đề thi ngoại ngữ / bài đọc.
     """
     name = "Universal Web Solver"
     supported_domains = ["*"]
@@ -26,8 +28,20 @@ class UniversalAdapter(BasePlatformAdapter):
         print(f"🌐 [UNIVERSAL SOLVER] TỰ ĐỘNG PHÂN TÍCH VÀ GIẢI ĐỀ THI: {test_url}")
         print("=" * 65)
 
-        await page.goto(test_url, wait_until="networkidle")
+        await page.goto(test_url, wait_until="domcontentloaded")
         await asyncio.sleep(2.5)
+
+        # 0. Kiểm tra thông minh: nếu phát hiện split-screen reading passage -> Ủy quyền sang LanguageExamAdapter
+        try:
+            extractor = DualPaneExtractor(page)
+            view = await extractor.extract_current_view()
+            if view.get("hasSplitScreen") or (view.get("passage", {}).get("paragraphs") and len(view.get("passage", {}).get("paragraphs")) >= 2):
+                print("⚡ [Universal] Phát hiện cấu trúc Dual-Pane / Reading Passage đa đoạn! Tự động kích hoạt Linguistic Exam Solver...")
+                from autoedu.platforms.language_exam import LanguageExamAdapter
+                lang_adapter = LanguageExamAdapter()
+                return await lang_adapter.solve_test(page, test_url, ai, screenshot_name)
+        except Exception as e:
+            print(f"ℹ️ [Universal] Dual-pane check note: {e}")
 
         # 1. Tìm các cụm câu hỏi tổng quát trong trang web
         # Thử tìm các fieldset, form, hoặc các container chứa câu hỏi
@@ -97,36 +111,41 @@ class UniversalAdapter(BasePlatformAdapter):
         # 2. Tìm nút nộp bài thông minh trên mọi trang web
         print("\n🚀 [Universal] Tìm kiếm nút Nộp bài / Hoàn thành...")
         submit_selectors = [
-            "button:has-text('Nộp bài')",
-            "button:has-text('NỘP BÀI')",
-            "button:has-text('Hoàn thành')",
-            "button:has-text('Gửi')",
-            "button:has-text('Submit')",
-            "input[type='submit']",
-            "a:has-text('Nộp bài')"
+            "button:has-text('Nộp bài')", "button:has-text('Nộp Bài')",
+            "button:has-text('Submit')", "button:has-text('Hoàn thành')",
+            "input[type='submit']", ".btn-submit"
         ]
         for sel in submit_selectors:
             btn = await page.query_selector(sel)
             if btn and await btn.is_visible():
                 await btn.click()
-                print(f"[✓] Đã click nút: {sel}")
+                print(f"   [✓] Đã bấm nút nộp bài: {sel}")
                 await asyncio.sleep(2)
-                # Đóng confirm modal nếu có
-                confirm = await page.query_selector(".modal button:has-text('Đồng ý'), .modal button:has-text('Xác nhận'), .modal button:has-text('Nộp bài')")
-                if confirm:
-                    await confirm.click()
                 break
 
-        await asyncio.sleep(3)
         if screenshot_name:
-            await page.screenshot(path=f"{screenshot_name}.png")
-            print(f"[✓] Đã lưu ảnh kết quả: {screenshot_name}.png")
+            await page.screenshot(path=screenshot_name, full_page=True)
+            print(f"📸 Đã lưu ảnh minh chứng tại: {screenshot_name}")
+
         return True
 
     async def _solve_flat_radios(self, page: Page, ai: GeminiWebClient, screenshot_name: Optional[str]) -> bool:
-        """Dự phòng: Xử lý dạng bài thi phân tán đơn giản."""
-        radios = await page.query_selector_all("input[type='radio']")
-        print(f"📊 Tìm thấy {len(radios)} nút radio rải rác.")
-        if screenshot_name:
-            await page.screenshot(path=f"{screenshot_name}.png")
-        return len(radios) > 0
+        """Phương án dự phòng: gom nhóm các thẻ radio theo thuộc tính 'name'."""
+        radio_groups = await page.evaluate("""() => {
+            const groups = {};
+            document.querySelectorAll('input[type="radio"]').forEach(r => {
+                const name = r.name || 'unnamed';
+                if (!groups[name]) groups[name] = [];
+                groups[name].push(r.value || r.id || 'opt');
+            });
+            return groups;
+        }""")
+        print(f"🎯 [Universal] Tìm thấy {len(radio_groups)} nhóm radio.")
+        for name, opts in radio_groups.items():
+            try:
+                radios = await page.query_selector_all(f"input[type='radio'][name='{name}']")
+                if radios:
+                    await radios[0].click()
+            except Exception:
+                pass
+        return True

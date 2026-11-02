@@ -57,11 +57,8 @@ def load_env_discord():
     return webhook_url, bot_token, channel_id
 
 def send_discord_message(content: str = "", embeds: list = None) -> bool:
-    """Gui tin nhan den Discord qua Webhook."""
-    webhook_url, _, _ = load_env_discord()
-    if not webhook_url:
-        print("[!] Chua cau hinh DISCORD_WEBHOOK_URL trong .env")
-        return False
+    """Gui tin nhan den Discord qua Webhook hoac Bot API (ho tro fallback)."""
+    webhook_url, bot_token, channel_id = load_env_discord()
 
     payload = {}
     if content:
@@ -69,27 +66,48 @@ def send_discord_message(content: str = "", embeds: list = None) -> bool:
     if embeds:
         payload["embeds"] = embeds
 
-    try:
-        data = json.dumps(payload, ensure_ascii=False).encode("utf-8")
-        req = urllib.request.Request(
-            webhook_url,
-            data=data,
-            headers={
-                "Content-Type": "application/json; charset=utf-8",
-                "User-Agent": "AntigravityDiscordNotifier/2.0"
-            }
-        )
-        with urllib.request.urlopen(req, timeout=15) as resp:
-            return resp.status in (200, 204)
-    except Exception as e:
-        print(f"[!] Loi gui tin nhan Discord: {e}")
-        return False
+    data = json.dumps(payload, ensure_ascii=False).encode("utf-8")
+
+    # 1. Thu gui qua Webhook truoc
+    if webhook_url:
+        try:
+            req = urllib.request.Request(
+                webhook_url,
+                data=data,
+                headers={
+                    "Content-Type": "application/json; charset=utf-8",
+                    "User-Agent": "AntigravityDiscordNotifier/3.0"
+                }
+            )
+            with urllib.request.urlopen(req, timeout=15) as resp:
+                if resp.status in (200, 204):
+                    return True
+        except Exception as e:
+            print(f"[!] Loi gui tin nhan qua Webhook ({e}), thu qua Bot API...")
+
+    # 2. Fallback qua Bot Token truc tiep den channel_id
+    if bot_token and channel_id:
+        try:
+            req = urllib.request.Request(
+                f"https://discord.com/api/v10/channels/{channel_id}/messages",
+                data=data,
+                headers={
+                    "Authorization": f"Bot {bot_token}",
+                    "Content-Type": "application/json; charset=utf-8",
+                    "User-Agent": "AntigravityDiscordNotifier/3.0"
+                }
+            )
+            with urllib.request.urlopen(req, timeout=15) as resp:
+                return resp.status in (200, 201)
+        except Exception as e:
+            print(f"[!] Loi gui qua Bot API: {e}")
+
+    return False
 
 def send_discord_photo(photo_path: str, title: str = "", description: str = "", color: int = 0x5865F2, fields: list = None) -> bool:
-    """Gui anh (screenshot) kem Embed day du thong tin den Discord qua Webhook."""
-    webhook_url, _, _ = load_env_discord()
-    if not webhook_url:
-        print("[!] Chua cau hinh DISCORD_WEBHOOK_URL trong .env")
+    webhook_url, bot_token, channel_id = load_env_discord()
+    if not webhook_url and not (bot_token and channel_id):
+        print("[!] Chưa cấu hình DISCORD_WEBHOOK_URL hoặc DISCORD_BOT_TOKEN trong .env")
         return False
 
     if not os.path.exists(photo_path):
@@ -137,21 +155,43 @@ def send_discord_photo(photo_path: str, title: str = "", description: str = "", 
     # End
     body.extend(f"--{boundary}--\r\n".encode("utf-8"))
 
-    try:
-        req = urllib.request.Request(
-            webhook_url,
-            data=bytes(body),
-            headers={
-                "Content-Type": f"multipart/form-data; boundary={boundary}",
-                "Content-Length": str(len(body)),
-                "User-Agent": "AntigravityDiscordNotifier/2.0"
-            }
-        )
-        with urllib.request.urlopen(req, timeout=25) as resp:
-            return resp.status in (200, 204)
-    except Exception as e:
-        print(f"[!] Loi gui anh Discord: {e}")
-        return False
+    # 1. Thu gui qua Webhook truoc
+    if webhook_url:
+        try:
+            req = urllib.request.Request(
+                webhook_url,
+                data=bytes(body),
+                headers={
+                    "Content-Type": f"multipart/form-data; boundary={boundary}",
+                    "Content-Length": str(len(body)),
+                    "User-Agent": "AntigravityDiscordNotifier/3.0"
+                }
+            )
+            with urllib.request.urlopen(req, timeout=25) as resp:
+                if resp.status in (200, 204):
+                    return True
+        except Exception as e:
+            print(f"[!] Loi gui anh qua Webhook ({e}), thu qua Bot API...")
+
+    # 2. Fallback qua Bot API
+    if bot_token and channel_id:
+        try:
+            req = urllib.request.Request(
+                f"https://discord.com/api/v10/channels/{channel_id}/messages",
+                data=bytes(body),
+                headers={
+                    "Authorization": f"Bot {bot_token}",
+                    "Content-Type": f"multipart/form-data; boundary={boundary}",
+                    "Content-Length": str(len(body)),
+                    "User-Agent": "AntigravityDiscordNotifier/3.0"
+                }
+            )
+            with urllib.request.urlopen(req, timeout=25) as resp:
+                return resp.status in (200, 201)
+        except Exception as e:
+            print(f"[!] Loi gui anh qua Bot API: {e}")
+
+    return False
 
 def notify_task_completed(
     task_title: str,

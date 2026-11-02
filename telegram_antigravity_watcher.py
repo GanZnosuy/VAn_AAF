@@ -58,23 +58,25 @@ def get_antigravity_status_summary():
 
                 for l in lines[-10:]:
                     try:
+                        import html
                         o = json.loads(l.strip())
                         for t in o.get("tool_calls", []):
-                            n = t.get("name", "")
-                            d = t.get("args", {}).get("toolSummary", n).strip('"')
+                            n = html.escape(str(t.get("name", "")))
+                            d = html.escape(str(t.get("args", {}).get("toolSummary", n)).strip('"'))
                             recent_tools.append(f"• <code>{n}</code>: {d}")
                     except Exception:
                         pass
         except Exception as e:
             last_action = str(e)
 
+    import html
     recent_str = "\n".join(recent_tools[-4:]) if recent_tools else "Chưa có hành động mới"
     now_str = datetime.now().strftime("%H:%M:%S %d/%m")
 
     msg = (
         f"🤖 <b>BÁO CÁO TIẾN ĐỘ ANTIGRAVITY</b> ({now_str})\n\n"
-        f"📍 <b>Trạng thái:</b> {status}\n"
-        f"🎯 <b>Đang làm:</b> {last_action}\n"
+        f"📍 <b>Trạng thái:</b> {html.escape(status)}\n"
+        f"🎯 <b>Đang làm:</b> {html.escape(last_action)}\n"
         f"🔢 <b>Tổng số bước:</b> {total_steps}\n\n"
         f"⚡ <b>Hành động gần nhất:</b>\n{recent_str}\n\n"
         f"<i>Gõ /homework để xem kết quả bài tập đêm!</i>"
@@ -87,12 +89,14 @@ def get_homework_summary():
         return "📁 Chưa có file log bài tập đêm."
     
     try:
+        import html
         with open(LOG_FILE, "r", encoding="utf-8", errors="ignore") as f:
             lines = [l.strip() for l in f.readlines() if l.strip()]
-        last_logs = "\n".join(lines[-6:]) if lines else "Chưa có log."
+        last_logs = html.escape("\n".join(lines[-6:])) if lines else "Chưa có log."
         return f"🌙 <b>NHẬT KÝ BÀI TẬP VỀ NHÀ GẦN NHẤT:</b>\n\n<pre>{last_logs}</pre>"
     except Exception as e:
-        return f"Lỗi đọc log: {e}"
+        import html
+        return f"Lỗi đọc log: {html.escape(str(e))}"
 
 def poll_telegram_bot():
     """Vong lap lang nghe tin nhan tu dien thoai."""

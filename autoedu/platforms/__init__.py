@@ -1,5 +1,6 @@
 from typing import List, Type
 from autoedu.platforms.base import BasePlatformAdapter
+from autoedu.platforms.language_exam import LanguageExamAdapter
 from autoedu.platforms.onluyen import OnluyenAdapter
 from autoedu.platforms.azota import AzotaAdapter
 from autoedu.platforms.k12online import K12OnlineAdapter
@@ -7,6 +8,7 @@ from autoedu.platforms.google_forms import GoogleFormsAdapter
 from autoedu.platforms.universal import UniversalAdapter
 
 REGISTERED_PLATFORMS: List[Type[BasePlatformAdapter]] = [
+    LanguageExamAdapter,
     OnluyenAdapter,
     AzotaAdapter,
     K12OnlineAdapter,
@@ -16,6 +18,7 @@ REGISTERED_PLATFORMS: List[Type[BasePlatformAdapter]] = [
 def get_platform_adapter(url: str) -> BasePlatformAdapter:
     """
     Tự động phân tích URL bài thi và chọn Adapter chuyên biệt phù hợp:
+    - Language Exams (IELTS, TOEFL, TOEIC, VSTEP, SAT, STUDY4, YouPass, Canvas, Moodle...)
     - Onluyen.vn (app.onluyen.vn, onluyen.vn)
     - Azota (azota.vn)
     - K12Online (k12online.vn)
@@ -30,6 +33,7 @@ def get_platform_adapter(url: str) -> BasePlatformAdapter:
 
 __all__ = [
     "BasePlatformAdapter",
+    "LanguageExamAdapter",
     "OnluyenAdapter",
     "AzotaAdapter",
     "K12OnlineAdapter",

@@ -40,7 +40,14 @@ def find_latest_transcript(brain_dir: Path = DEFAULT_BRAIN_DIR) -> Path:
     if not candidates:
         return None
 
-    # Sap xep theo thoi gian sua doi moi nhat
+    # Neu co cac phien hoat dong gan day (trong vong 30 phut), uu tien phien chinh co luong thao tac lon nhat
+    now = time.time()
+    recent = [p for p in candidates if (now - p.stat().st_mtime) < 1800]
+    if recent:
+        recent.sort(key=lambda p: (p.stat().st_size, p.stat().st_mtime), reverse=True)
+        return recent[0]
+
+    # Fallback theo mtime moi nhat
     candidates.sort(key=lambda p: p.stat().st_mtime, reverse=True)
     return candidates[0]
 

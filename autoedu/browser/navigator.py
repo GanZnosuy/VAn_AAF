@@ -40,12 +40,12 @@ async def scan_assignments(page: Page) -> List[Dict[str, str]]:
         rows.forEach(r => {
             const parentRow = r.closest('.task-item, .item, tr, .row, .d-flex') || r.parentElement;
             
-            // Tìm tên môn học (12A1 - ...)
+            // Tìm tên môn học (Tiếng Anh, Toán, 12A1, ...)
             let subject = '';
             let curr = parentRow;
             while (curr && curr !== document.body) {
                 const header = curr.querySelector('.header, .title, .subject-name, h4, h5, h6, .badge');
-                if (header && header.innerText.includes('12A1')) {
+                if (header && header.innerText.trim()) {
                     subject = header.innerText.trim();
                     break;
                 }

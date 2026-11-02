@@ -3,7 +3,7 @@ import os
 import sys
 import json
 import logging
-from datetime import datetime
+from datetime import datetime, timezone
 from pathlib import Path
 from playwright.async_api import async_playwright
 from telegram_notifier import send_telegram_message, send_telegram_photo
@@ -20,6 +20,33 @@ if sys.platform == "win32":
         sys.stderr.reconfigure(encoding="utf-8", line_buffering=True)
     except Exception:
         pass
+
+def configure_background_window():
+    """
+    Dam bao cua so terminal luon hien thi duoi nen de khong anh huong thao tac:
+    - Dat tieu de: 'AutoEdu Onluyen Solver [Chay duoi nen]'
+    - Day cua so xuong day Z-order (HWND_BOTTOM) va khong cuop focus (SWP_NOACTIVATE)
+    - Thu nho xuong Taskbar khong cuop focus (SW_SHOWMINNOACTIVE = 7)
+    """
+    if sys.platform != "win32":
+        return
+    try:
+        import ctypes
+        kernel32 = ctypes.windll.kernel32
+        user32 = ctypes.windll.user32
+
+        kernel32.SetConsoleTitleW("AutoEdu Onluyen Solver [Chay duoi nen]")
+        hwnd = kernel32.GetConsoleWindow()
+        if hwnd:
+            # HWND_BOTTOM = 1, SWP_NOSIZE = 1, SWP_NOMOVE = 2, SWP_NOACTIVATE = 0x10
+            user32.SetWindowPos(hwnd, 1, 0, 0, 0, 0, 0x0001 | 0x0002 | 0x0010)
+            # SW_SHOWMINNOACTIVE = 7
+            user32.ShowWindow(hwnd, 7)
+    except Exception:
+        pass
+
+configure_background_window()
+
 
 # Thư mục lưu trữ và cấu hình
 BASE_DIR = Path(__file__).resolve().parent
@@ -40,21 +67,43 @@ logging.basicConfig(
 
 USER_DATA_DIR = os.path.expanduser("~/.onluyen-browser-profile")
 
+def check_internet_connection(timeout: float = 3.0) -> bool:
+    """Kiểm tra máy tính có kết nối mạng Internet hay không."""
+    import socket
+    targets = [
+        ("8.8.8.8", 53),
+        ("1.1.1.1", 53),
+        ("www.google.com", 80),
+        ("app.onluyen.vn", 443)
+    ]
+    for host, port in targets:
+        try:
+            sock = socket.create_connection((host, port), timeout=timeout)
+            sock.close()
+            return True
+        except (socket.timeout, OSError):
+            continue
+    return False
+
 def send_windows_notification(title: str, message: str):
-    """Gửi thông báo Windows Toast trực tiếp không cần thư viện ngoài."""
+    """Gửi thông báo Windows Toast trực tiếp không cần thư viện ngoài (An toàn chống Command Injection)."""
     try:
         import subprocess
-        ps_cmd = f"""
+        ps_cmd = """
         [Windows.UI.Notifications.ToastNotificationManager, Windows.UI.Notifications, ContentType = WindowsRuntime] > $null
         $template = [Windows.UI.Notifications.ToastNotificationManager]::GetTemplateContent([Windows.UI.Notifications.ToastTemplateType]::ToastText02)
         $textNodes = $template.GetElementsByTagName("text")
-        $textNodes.Item(0).AppendChild($template.CreateTextNode("{title}")) > $null
-        $textNodes.Item(1).AppendChild($template.CreateTextNode("{message}")) > $null
+        $textNodes.Item(0).AppendChild($template.CreateTextNode($env:AGY_TOAST_TITLE)) > $null
+        $textNodes.Item(1).AppendChild($template.CreateTextNode($env:AGY_TOAST_MSG)) > $null
         $notifier = [Windows.UI.Notifications.ToastNotificationManager]::CreateToastNotifier("AutoEdu Nightly Homework")
         $notification = [Windows.UI.Notifications.ToastNotification]::new($template)
         $notifier.Show($notification)
         """
-        subprocess.run(["powershell", "-NoProfile", "-Command", ps_cmd], capture_output=True, timeout=10)
+        env = os.environ.copy()
+        env["AGY_TOAST_TITLE"] = str(title)
+        env["AGY_TOAST_MSG"] = str(message)
+        creationflags = 0x08000000 if sys.platform == "win32" else 0
+        subprocess.run(["powershell", "-NoProfile", "-Command", ps_cmd], env=env, capture_output=True, timeout=10, creationflags=creationflags)
     except Exception as e:
         logging.warning(f"Không thể gửi Windows Notification: {e}")
 
@@ -71,9 +120,11 @@ async def _execute_nightly_job(headless: bool = True):
     from autoedu.ai.gemini_web import GeminiWebClient
 
     ai = GeminiWebClient()
+    logging.info(f"⚡ AI Engine: {ai.model} (Mức tư duy: {ai.thinking_level}) - Tối ưu tốc độ giải bài Onluyen")
     solved_count = 0
     failed_count = 0
     solved_titles = []
+    total_pending = 0
 
     async with async_playwright() as p:
         logging.info("Khởi động trình duyệt...")
@@ -85,7 +136,7 @@ async def _execute_nightly_job(headless: bool = True):
 
         # 1. Đi tới trang danh sách bài tập
         logging.info("Truy cập trang bài tập: https://app.onluyen.vn/school/student/assignment")
-        await page.goto("https://app.onluyen.vn/school/student/assignment", wait_until="networkidle")
+        await page.goto("https://app.onluyen.vn/school/student/assignment", wait_until="domcontentloaded", timeout=45000)
         await asyncio.sleep(3)
         await auto_login_if_needed(page)
 
@@ -99,65 +150,74 @@ async def _execute_nightly_job(headless: bool = True):
             except Exception:
                 pass
 
-        # Cuộn trang nhẹ để kích hoạt danh sách
-        for _ in range(4):
-            await page.mouse.wheel(0, 800)
-            await asyncio.sleep(0.3)
+        attempted_titles = set()
+        loop_counter = 0
+        max_attempts = 15
 
-        # 2. Quét danh sách bài tập cần làm
-        pending_items = await page.evaluate("""() => {
-            const results = [];
-            const rows = document.querySelectorAll('.func-info');
-            rows.forEach((r, idx) => {
-                const parentRow = r.closest('.task-item, .item, tr, .row, .d-flex') || r.parentElement;
-                const text = parentRow ? parentRow.innerText.replace(/\\s+/g, ' ').trim() : '';
-                
-                // Tìm link trực tiếp nếu có
-                const link = parentRow ? parentRow.querySelector('a[href*=\"test\"], [routerlink*=\"test\"], a') : null;
-                const href = link ? (link.getAttribute('href') || link.getAttribute('routerlink') || '') : '';
-                
-                // Tiêu đề
-                const titleEl = parentRow ? (parentRow.querySelector('.name, .task-name, .title, b, strong') || parentRow) : r;
-                const title = titleEl ? titleEl.innerText.replace(/\\s+/g, ' ').trim() : text;
+        while loop_counter < max_attempts:
+            loop_counter += 1
 
-                if (text.includes('Chưa làm') || text.includes('Đang làm')) {
-                    results.push({
-                        index: idx,
-                        title: title.split('\\n')[0],
-                        fullText: text,
-                        href: href
-                    });
-                }
-            });
-            return results;
-        }""")
+            # Cuộn trang nhẹ để kích hoạt danh sách
+            for _ in range(4):
+                await page.mouse.wheel(0, 800)
+                await asyncio.sleep(0.3)
 
-        total_pending = len(pending_items)
-        logging.info(f"🔍 Phát hiện tổng số bài tập chưa hoàn thành: {total_pending}")
+            # Quét danh sách bài tập cần làm
+            pending_items = await page.evaluate("""() => {
+                const results = [];
+                const rows = document.querySelectorAll('.func-info');
+                rows.forEach((r, idx) => {
+                    const parentRow = r.closest('.task-item, .item, tr, .row, .d-flex') || r.parentElement;
+                    const text = parentRow ? parentRow.innerText.replace(/\\s+/g, ' ').trim() : '';
+                    
+                    const link = parentRow ? parentRow.querySelector('a[href*="test"], [routerlink*="test"], a') : null;
+                    const href = link ? (link.getAttribute('href') || link.getAttribute('routerlink') || '') : '';
+                    
+                    const titleEl = parentRow ? (parentRow.querySelector('.name, .task-name, .title, b, strong') || parentRow) : r;
+                    const title = titleEl ? titleEl.innerText.replace(/\\s+/g, ' ').trim() : text;
 
-        if total_pending == 0:
-            logging.info("✨ Không có bài tập mới nào cần làm. Hệ thống sẽ nghỉ ngơi.")
-            send_windows_notification(
-                "AutoEdu - Kiểm tra bài tập",
-                "Không có bài tập mới nào trên Onluyen. Chúc bạn ngủ ngon!"
-            )
-            send_telegram_message("🌙 <b>AutoEdu Nightly Homework</b>\n\n✨ Hôm nay không có bài tập mới nào trên Onluyen.vn.\nChúc bạn ngủ ngon! 💤")
-            send_discord_message(embeds=[{
-                "title": "🌙 AutoEdu Nightly Homework",
-                "description": "✨ Hôm nay không có bài tập mới nào trên Onluyen.vn.\nChúc bạn ngủ ngon! 💤",
-                "color": 0x5865F2,
-                "timestamp": datetime.utcnow().isoformat() + "Z"
-            }])
-            await context.close()
-            return
+                    if (text.includes('Chưa làm') || text.includes('Đang làm')) {
+                        results.push({
+                            index: idx,
+                            title: title.split('\\n')[0],
+                            fullText: text,
+                            href: href
+                        });
+                    }
+                });
+                return results;
+            }""")
 
-        # 3. Lần lượt giải từng bài
-        for idx, item in enumerate(pending_items, 1):
-            title = item.get("title", f"Bài tập {idx}")
+            # Lọc ra các bài chưa được thử trong phiên này
+            remaining = [it for it in pending_items if it.get("title") not in attempted_titles]
+
+            if not remaining:
+                if loop_counter == 1:
+                    logging.info("✨ Không có bài tập mới nào cần làm. Hệ thống sẽ nghỉ ngơi.")
+                    send_windows_notification(
+                        "AutoEdu - Kiểm tra bài tập",
+                        "Không có bài tập mới nào trên Onluyen. Chúc bạn ngủ ngon!"
+                    )
+                    send_telegram_message("🌙 <b>AutoEdu Nightly Homework</b>\n\n✨ Hôm nay không có bài tập mới nào trên Onluyen.vn.\nChúc bạn ngủ ngon! 💤")
+                    send_discord_message(embeds=[{
+                        "title": "🌙 AutoEdu Nightly Homework",
+                        "description": "✨ Hôm nay không có bài tập mới nào trên Onluyen.vn.\nChúc bạn ngủ ngon! 💤",
+                        "color": 0x5865F2,
+                        "timestamp": datetime.now(timezone.utc).isoformat()
+                    }])
+                else:
+                    logging.info("✨ Đã hoàn thành hoặc kiểm tra hết tất cả các bài tập chưa làm!")
+                break
+
+            total_pending = len(remaining)
+            item = remaining[0]
+            title = item.get("title", f"Bài tập {loop_counter}")
             href = item.get("href", "")
+            attempted_titles.add(title)
+
             logging.info(f"--------------------------------------------------")
-            logging.info(f"▶️ [{idx}/{total_pending}] Bắt đầu xử lý: {title}")
-            
+            logging.info(f"▶️ [Bài {solved_count + failed_count + 1} / Còn {total_pending} bài chưa làm] Bắt đầu xử lý: {title}")
+
             # Xác định URL bài thi
             target_url = None
             if href and "test" in href:
@@ -165,18 +225,24 @@ async def _execute_nightly_job(headless: bool = True):
                     target_url = href
                 else:
                     target_url = f"https://app.onluyen.vn{href if href.startswith('/') else '/' + href}"
-            
+
             if not target_url:
-                # Nếu không có URL trực tiếp, click vào hàng tương ứng trên trang assignment
-                logging.info(f"Click vào hàng bài tập số {item['index']} để vào phòng thi...")
+                logging.info(f"Click vào nút Làm bài của hàng bài tập '{title}' (hàng số {item['index']})...")
                 try:
                     row_elements = await page.query_selector_all(".func-info")
                     if item['index'] < len(row_elements):
                         target_row = row_elements[item['index']]
-                        click_target = await target_row.query_selector("button, a, i, [role='button']") or target_row
+                        await target_row.scroll_into_view_if_needed()
+                        await asyncio.sleep(1)
+                        click_target = (
+                            await target_row.query_selector(".btn-func[title*='Làm bài'], .btn-func, button, a, i, [role='button']")
+                            or target_row
+                        )
                         await click_target.click()
-                        await page.wait_for_load_state("networkidle", timeout=15000)
-                        await asyncio.sleep(3)
+                        for _ in range(12):
+                            await asyncio.sleep(1)
+                            if "test" in page.url:
+                                break
                         target_url = page.url
                 except Exception as e:
                     logging.error(f"Lỗi khi click vào bài tập: {e}")
@@ -184,11 +250,12 @@ async def _execute_nightly_job(headless: bool = True):
             if not target_url or "assignment" in target_url:
                 logging.warning(f"Không thể mở URL bài thi cho: {title}")
                 failed_count += 1
+                await page.goto("https://app.onluyen.vn/school/student/assignment", wait_until="domcontentloaded", timeout=45000)
+                await asyncio.sleep(2)
                 continue
 
             logging.info(f"URL bài thi: {target_url}")
-            
-            # Tên file ảnh lưu kết quả
+
             safe_title = "".join(c for c in title if c.isalnum() or c in (' ', '_', '-')).strip().replace(' ', '_')
             screenshot_path = str(RESULTS_DIR / f"{datetime.now().strftime('%Y%m%d_%H%M')}_{safe_title}")
 
@@ -247,13 +314,15 @@ async def _execute_nightly_job(headless: bool = True):
                     recovery_hint="Kiểm tra đường truyền Internet của máy chủ/máy tính hoặc khởi động lại tiến trình."
                 )
 
-            # Quay lại trang danh sách bài tập nếu còn bài tiếp theo
-            if idx < total_pending:
-                logging.info("Quay lại trang danh sách bài tập để làm bài tiếp theo...")
-                await page.goto("https://app.onluyen.vn/school/student/assignment", wait_until="networkidle")
-                await asyncio.sleep(3)
+            # Luôn quay lại trang danh sách bài tập sau mỗi bài
+            logging.info("Quay lại trang danh sách bài tập để kiểm tra bài tiếp theo...")
+            await page.goto("https://app.onluyen.vn/school/student/assignment", wait_until="domcontentloaded", timeout=45000)
+            await asyncio.sleep(3)
 
         await context.close()
+
+    if solved_count == 0 and failed_count == 0:
+        return
 
     # Tổng kết
     logging.info(f"==================================================")
@@ -298,11 +367,61 @@ async def run_nightly_job(headless: bool = True):
         )
         raise
 
+async def run_hourly_loop(interval_seconds: int = 3600, headless: bool = True):
+    """
+    Vòng lặp tự động kiểm tra bài tập mỗi 1 tiếng khi có mạng.
+    - Kiểm tra kết nối Internet trước khi quét.
+    - Nếu mất mạng: Chờ mạng, thăm dò mỗi 30s.
+    - Ngay khi có mạng trở lại: Lập tức quét và giải bài tập Onluyen ngay để không bỏ sót!
+    - Khi hoàn tất: Nghỉ 1 tiếng (3600s) cho chu kỳ tiếp theo.
+    """
+    logging.info("=" * 60)
+    logging.info(f"🔄 KHỞI ĐỘNG CHẾ ĐỘ GIÁM SÁT BÀI TẬP (MỖI {interval_seconds // 60} PHÚT / TỰ ĐỘNG KHI CÓ MẠNG)")
+    logging.info("=" * 60)
+    
+    was_offline = False
+    
+    while True:
+        # 1. Kiểm tra mạng
+        online = check_internet_connection()
+        if not online:
+            if not was_offline:
+                logging.warning("⚠️ [OFFLINE] Hiện không có kết nối Internet. Tạm dừng và chờ kết nối mạng...")
+                was_offline = True
+            await asyncio.sleep(30)
+            continue
+        
+        if was_offline:
+            logging.info("🌐 [ONLINE] Đã phát hiện mạng Internet trở lại! Lập tức quét bài tập để không bỏ sót...")
+            was_offline = False
+        else:
+            logging.info("🌐 [ONLINE] Kết nối Internet ổn định. Bắt đầu phiên quét bài tập Onluyen.vn...")
+            
+        # 2. Chạy phiên giải bài tập
+        try:
+            await run_nightly_job(headless=headless)
+        except Exception as e:
+            logging.error(f"Lỗi trong phiên làm việc: {e}")
+            
+        # 3. Chờ chu kỳ tiếp theo (chia nhỏ 15s để phản ứng nhanh nếu mạng bị ngắt)
+        logging.info(f"😴 Phiên quét hoàn tất. Hệ thống sẽ nghỉ ngơi {interval_seconds // 60} phút trước phiên tiếp theo...")
+        elapsed = 0
+        while elapsed < interval_seconds:
+            await asyncio.sleep(min(15, interval_seconds - elapsed))
+            elapsed += 15
+            # Nếu trong lúc ngủ bị ngắt mạng, ghi nhận để khi có mạng lại quét ngay
+            if not check_internet_connection():
+                logging.warning("⚠️ Mất mạng trong thời gian chờ. Chuyển sang chế độ theo dõi mạng...")
+                was_offline = True
+                break
+
 if __name__ == "__main__":
     import argparse
-    parser = argparse.ArgumentParser(description="AutoEdu Nightly Homework Solver")
+    parser = argparse.ArgumentParser(description="AutoEdu Hourly Homework Solver")
     parser.add_argument("--headed", action="store_true", help="Hiện cửa sổ trình duyệt (mặc định ẩn)")
-    parser.add_argument("--schedule", type=str, default=None, help="Chạy dạng hẹn giờ lặp lại (ví dụ: 22:00)")
+    parser.add_argument("--once", action="store_true", help="Chỉ chạy quét 1 lần duy nhất rồi thoát")
+    parser.add_argument("--interval", type=int, default=3600, help="Thời gian giãn cách giữa các lần quét (mặc định 3600 giây = 1 tiếng)")
+    parser.add_argument("--schedule", type=str, default=None, help="Chạy dạng hẹn giờ lặp lại hàng ngày (ví dụ: 22:00)")
     args = parser.parse_args()
 
     if args.schedule:
@@ -317,6 +436,12 @@ if __name__ == "__main__":
                 print(f"😴 Chờ qua phút hiện tại...")
                 time.sleep(65)
             time.sleep(20)
-    else:
+    elif args.once:
         # Chạy ngay lập tức 1 lần
+        if not check_internet_connection():
+            logging.error("❌ Không có kết nối mạng Internet. Không thể chạy phiên giải bài.")
+            sys.exit(1)
         asyncio.run(run_nightly_job(headless=not args.headed))
+    else:
+        # Mặc định: Chế độ giám sát định kỳ mỗi 1 tiếng khi có mạng
+        asyncio.run(run_hourly_loop(interval_seconds=args.interval, headless=not args.headed))

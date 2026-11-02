@@ -21,7 +21,7 @@ async def solve_test_url(
     print(f"📖 BẮT ĐẦU GIẢI: {test_url}")
     print("=" * 65)
 
-    await page.goto(test_url, wait_until="networkidle")
+    await page.goto(test_url, wait_until="domcontentloaded", timeout=45000)
     await asyncio.sleep(2)
     await auto_login_if_needed(page)
 
@@ -76,32 +76,37 @@ async def solve_test_url(
         print(f"\n--- [CÂU {q_num}/{total_q}] ---")
         await asyncio.sleep(1.2)
 
-        data = await page.evaluate(JS_EXTRACTOR_SCRIPT)
+        try:
+            data = await page.evaluate(JS_EXTRACTOR_SCRIPT)
 
-        # Định tuyến theo loại câu hỏi
-        if data.get("hasInput"):
-            await handle_short_answer(page, q_num, data, ai)
-        elif data.get("hasTrueFalse"):
-            await handle_true_false(page, q_num, data, ai)
-        else:
-            await handle_choice(page, q_num, data, ai)
+            # Định tuyến theo loại câu hỏi
+            if data.get("hasInput"):
+                await handle_short_answer(page, q_num, data, ai)
+            elif data.get("hasTrueFalse"):
+                await handle_true_false(page, q_num, data, ai)
+            else:
+                await handle_choice(page, q_num, data, ai)
 
-        await asyncio.sleep(0.8)
+            await asyncio.sleep(0.8)
 
-        # Kiểm tra xác nhận lưu đáp án (thử tối đa 2 lần)
-        for retry in range(2):
-            is_done = await page.evaluate(f"""num => {{
-                const items = document.querySelectorAll('.grid .option');
-                for (const item of items) {{
-                    if (item.innerText.trim() === String(num)) return item.classList.contains('done');
-                }}
-                return false;
-            }}""", q_num)
-            if is_done:
-                break
-            print(f"[!] Câu {q_num} chưa có nhãn 'done', bấm lại TRẢ LỜI (lần {retry+1})...")
-            await click_tra_loi_btn(page)
-            await asyncio.sleep(1.2)
+            # Kiểm tra xác nhận lưu đáp án (thử tối đa 2 lần)
+            for retry in range(2):
+                is_done = await page.evaluate(f"""num => {{
+                    const items = document.querySelectorAll('.grid .option');
+                    for (const item of items) {{
+                        if (item.innerText.trim() === String(num)) return item.classList.contains('done');
+                    }}
+                    return false;
+                }}""", q_num)
+                if is_done:
+                    break
+                print(f"[!] Câu {q_num} chưa có nhãn 'done', bấm lại TRẢ LỜI (lần {retry+1})...")
+                await click_tra_loi_btn(page)
+                await asyncio.sleep(1.2)
+        except Exception as q_err:
+            if "Target closed" in str(q_err) or "browser has been closed" in str(q_err):
+                raise q_err
+            print(f"⚠️ [!] Lỗi xử lý câu {q_num}: {q_err}. Đang tiếp tục câu kế tiếp...")
 
     print("\n" + "=" * 65)
     print("🎉 HOÀN THÀNH TOÀN BỘ CÂU HỎI! TIẾN HÀNH NỘP BÀI...")
