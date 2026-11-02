@@ -50,6 +50,7 @@ class CentralDashboardWindow(QMainWindow):
     open_twin_challenge_requested = pyqtSignal(dict)
     profile_changed = pyqtSignal(str)
     request_vision_sync = pyqtSignal()
+    request_read_question = pyqtSignal()
     request_reset_q1 = pyqtSignal()
     request_launch_chrome = pyqtSignal()
 
@@ -986,6 +987,15 @@ class CentralDashboardWindow(QMainWindow):
         )
         btn_vision.clicked.connect(self.request_vision_sync.emit)
         footer.addWidget(btn_vision)
+
+        btn_read_q = QPushButton("🔍 Đọc Đề Câu Này (Alt+Q)")
+        btn_read_q.setFixedHeight(38)
+        btn_read_q.setStyleSheet(
+            "QPushButton { background: #1e3a8a; color: #dbeafe; font-weight: bold; font-size: 12px; padding: 0 14px; border-radius: 6px; border: 1px solid #3b82f6; } "
+            "QPushButton:hover { background: #172554; }"
+        )
+        btn_read_q.clicked.connect(self.request_read_question.emit)
+        footer.addWidget(btn_read_q)
 
         btn_reset = QPushButton("🔄 Reset Câu #01 (00:00)")
         btn_reset.setFixedHeight(38)

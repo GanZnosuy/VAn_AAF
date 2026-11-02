@@ -2,20 +2,23 @@
 """
 antigravity_auto_continue_engine.py
 ================================================================================
-ANTIGRAVITY AUTONOMOUS AUTO-CONTINUE ENGINE (v1.0 - Industrial Production Grade)
+ANTIGRAVITY AUTONOMOUS AUTO-CONTINUE ENGINE (v2.0 - Multi-Account Auto-Rotation)
 ================================================================================
 Autonomous, background multi-session watcher daemon for Google Antigravity.
 Continuously monitors all active conversation threads, detects when any agent
 stops prematurely (token exhaustion, stream truncation, server restart,
-incomplete plan stall, or error abort), and autonomously injects the
-/auto-continue protocol to keep all tasks executing non-stop until 100% complete.
+incomplete plan stall, error abort, or quota limit reached), and autonomously:
+1. Rotates Google accounts via Antigravity Tools (antigravity-tools.exe) when
+   receiving an out-of-token / quota exceeded notice.
+2. Injects the /auto-continue protocol to keep all tasks executing non-stop
+   until 100% complete.
 
 Core Philosophy:
 - UNBOUNDED TOKEN EXHAUSTION (NO TOKEN CONSERVATION): Commands agents to consume
   maximum tokens, strictly forbidding placeholders (# TODO, pass, mock snippets)
   or passive stalling. Grounded in disk truth.
-- CONTINUOUS ZERO-TOUCH AUTONOMY: The user never has to manually type "tiếp tục"
-  or "/auto-continue".
+- CONTINUOUS ZERO-TOUCH AUTONOMY: The user never has to manually type "tiếp tục",
+  "/auto-continue", or manually rotate accounts.
 ================================================================================
 """
 
@@ -43,9 +46,12 @@ BASE_DIR = Path(__file__).resolve().parent
 LOG_DIR = BASE_DIR / "logs"
 LOG_DIR.mkdir(parents=True, exist_ok=True)
 LOG_FILE = LOG_DIR / "auto_continue_engine.log"
+
 DEFAULT_BRAIN_DIR = Path(os.path.expanduser(r"~\.gemini\antigravity\brain"))
 DEFAULT_AGENTAPI_BAT = Path(os.path.expanduser(r"~\.gemini\antigravity\bin\agentapi.bat"))
 DEFAULT_LANG_SERVER = Path(os.path.expanduser(r"~\AppData\Local\Programs\antigravity\resources\bin\language_server.exe"))
+DEFAULT_ANTIGRAVITY_TOOLS_LNK = Path(r"c:\Users\vuong\OneDrive\Desktop\Antigravity Tools.lnk")
+DEFAULT_ANTIGRAVITY_TOOLS_EXE = Path(os.path.expanduser(r"~\AppData\Local\Antigravity Tools\antigravity-tools.exe"))
 
 # Ensure UTF-8 output and redirect None streams when running under pythonw.exe
 if sys.platform == "win32":
@@ -85,7 +91,7 @@ file_handler.setFormatter(file_formatter)
 logger.addHandler(file_handler)
 
 # Console handler (if stdout exists and not redirected to log)
-if sys.stdout and sys.stdout.name != str(LOG_FILE):
+if sys.stdout and getattr(sys.stdout, "name", "") != str(LOG_FILE):
     console_handler = logging.StreamHandler(sys.stdout)
     console_formatter = logging.Formatter(
         "%(asctime)s [%(levelname)s] %(message)s",
@@ -123,6 +129,125 @@ def acquire_single_instance_mutex(mutex_name: str = MUTEX_NAME) -> bool:
     return True
 
 # ------------------------------------------------------------------------------
+# ANTIGRAVITY TOOLS ACCOUNT SWITCHER INTEGRATION
+# ------------------------------------------------------------------------------
+class AntigravityToolsAccountSwitcher:
+    """
+    Direct bridge to Antigravity Tools (antigravity-tools.exe):
+    - Reads active accounts across clients ('agy' CLI, 'classic', 'ide')
+    - Automatically rotates to next healthy account when quota or token limit is reached
+    - Emits structured telemetry on rotation events
+    """
+
+    def __init__(self, lnk_path: Optional[Path] = None, exe_path: Optional[Path] = None):
+        self.lnk_path: Path = lnk_path or DEFAULT_ANTIGRAVITY_TOOLS_LNK
+        self.exe_path: Optional[Path] = exe_path or self._resolve_tools_exe()
+
+    def _resolve_tools_exe(self) -> Optional[Path]:
+        """Resolve antigravity-tools.exe from default path, LNK shortcut, or PATH."""
+        # 1. Default AppData Local path
+        if DEFAULT_ANTIGRAVITY_TOOLS_EXE.exists():
+            return DEFAULT_ANTIGRAVITY_TOOLS_EXE
+
+        # 2. Inspect LNK shortcut on Desktop
+        if self.lnk_path.exists():
+            try:
+                import win32com.client
+                shell = win32com.client.Dispatch("WScript.Shell")
+                sc = shell.CreateShortcut(str(self.lnk_path))
+                target = Path(sc.TargetPath)
+                if target.exists():
+                    return target
+            except Exception:
+                pass
+
+        # 3. Check system PATH
+        import shutil
+        which_path = shutil.which("antigravity-tools")
+        if which_path:
+            return Path(which_path)
+
+        return None
+
+    def get_current_accounts(self) -> Dict[str, str]:
+        """Query currently active accounts from antigravity-tools."""
+        if not self.exe_path or not self.exe_path.exists():
+            return {}
+        try:
+            res = subprocess.run(
+                [str(self.exe_path), "current"],
+                capture_output=True,
+                text=True,
+                encoding="utf-8",
+                errors="ignore",
+                timeout=6
+            )
+            out = {}
+            for line in res.stdout.splitlines():
+                if ":" in line:
+                    k, v = line.split(":", 1)
+                    out[k.strip().lower()] = v.strip()
+            return out
+        except Exception as e:
+            logger.debug(f"Error querying current accounts: {e}")
+            return {}
+
+    def switch_account(
+        self,
+        target_client: str = "agy",
+        account_identifier: Optional[str] = None
+    ) -> Tuple[bool, str, str]:
+        """
+        Execute account switch via `antigravity-tools switch [account] --target <target_client>`.
+        Returns: (success: bool, new_account_email: str, message: str)
+        """
+        if not self.exe_path or not self.exe_path.exists():
+            return False, "", "Không tìm thấy antigravity-tools.exe"
+
+        cmd = [str(self.exe_path), "switch"]
+        if account_identifier:
+            cmd.append(str(account_identifier))
+        if target_client:
+            cmd.extend(["--target", target_client])
+
+        try:
+            res = subprocess.run(
+                cmd,
+                capture_output=True,
+                text=True,
+                encoding="utf-8",
+                errors="ignore",
+                timeout=12
+            )
+            output = res.stdout.strip()
+            if res.returncode == 0:
+                # Extract new email
+                email_match = re.search(r"[\w\.-]+@[\w\.-]+\.\w+", output)
+                email = email_match.group(0) if email_match else "Next Account"
+                msg = f"Đã chuyển sang tài khoản: {email} (Target: {target_client})"
+                logger.info(f"[🔀] {msg}")
+                return True, email, msg
+            else:
+                err_msg = res.stderr.strip() or output
+                logger.warning(f"[!] Đổi tài khoản thất bại: {err_msg}")
+                return False, "", err_msg
+        except Exception as e:
+            logger.error(f"[!] Lỗi khi gọi antigravity-tools switch: {e}")
+            return False, "", str(e)
+
+    def rotate_all_targets(self) -> Tuple[bool, str, str]:
+        """
+        Rotates accounts across both 'agy' CLI and 'classic' targets.
+        Returns: (overall_success: bool, primary_new_email: str, summary: str)
+        """
+        ok_agy, email_agy, msg_agy = self.switch_account(target_client="agy")
+        ok_classic, email_classic, msg_classic = self.switch_account(target_client="classic")
+
+        primary_email = email_agy or email_classic or "Unknown Account"
+        summary = f"{msg_agy} | {msg_classic}"
+        return (ok_agy or ok_classic), primary_email, summary
+
+# ------------------------------------------------------------------------------
 # NOTIFICATION INTEGRATION (DISCORD & TELEGRAM)
 # ------------------------------------------------------------------------------
 def send_telemetry_notification(
@@ -134,24 +259,37 @@ def send_telemetry_notification(
     tokens_burned: int,
     files_touched: List[str],
     workspace_name: str,
-    last_action: str
+    last_action: str,
+    account_switched: Optional[str] = None
 ):
     """Dispatch real-time telemetry to Discord and Telegram with step/token burn stats."""
-    now_str = datetime.now().strftime("%H:%M:%S %d/%m/%Y")
     short_id = conv_id[:8] + "..." if len(conv_id) > 8 else conv_id
 
     # 1. Discord Embed Notification
     try:
         from discord_notifier import send_discord_message, get_iso_timestamp
+
+        embed_color = 0xF1C40F if account_switched else 0x3498DB  # Gold for Account Switch, Blue for Standard
+        title_prefix = "🔀 Tự động đổi tài khoản & Tiếp tục" if account_switched else "🔄 Tự động kích hoạt /auto-continue"
+
         fields = [
             {"name": "🔥 Lần kích hoạt thứ", "value": f"**#{iteration}**", "inline": True},
             {"name": "🔢 Tổng số bước", "value": f"**{total_steps}** steps", "inline": True},
             {"name": "⚡ Token tiêu hao", "value": f"**{tokens_burned:,}** tokens", "inline": True},
             {"name": "📁 Workspace", "value": f"`{workspace_name}`", "inline": True},
-            {"name": "🚨 Phân loại gián đoạn", "value": f"**{trigger_type}**", "inline": True},
-            {"name": "🔍 Chi tiết nguyên nhân", "value": f"_{trigger_detail[:250]}_", "inline": False},
-            {"name": "📍 Thao tác trước khi dừng", "value": f"`{last_action[:300] or 'N/A'}`", "inline": False},
+            {"name": "🚨 Phân loại", "value": f"**{trigger_type}**", "inline": True},
         ]
+
+        if account_switched:
+            fields.append({
+                "name": "🔑 Tài khoản mới đã chuyển (Antigravity Tools):",
+                "value": f"✨ **`{account_switched}`**",
+                "inline": False
+            })
+
+        fields.append({"name": "🔍 Chi tiết nguyên nhân", "value": f"_{trigger_detail[:250]}_", "inline": False})
+        fields.append({"name": "📍 Thao tác trước khi dừng", "value": f"`{last_action[:300] or 'N/A'}`", "inline": False})
+
         if files_touched:
             files_snippet = "\n".join([f"• `{f}`" for f in files_touched[:5]])
             if len(files_touched) > 5:
@@ -159,41 +297,49 @@ def send_telemetry_notification(
             fields.append({"name": "📦 Tệp tin đã thao tác gần nhất", "value": files_snippet, "inline": False})
 
         embed = [{
-            "title": f"🔄 Tự động kích hoạt /auto-continue: [{short_id}]",
+            "title": f"{title_prefix}: [{short_id}]",
             "description": (
-                f"Phát hiện phiên **Antigravity** (`{conv_id}`) bị dừng giữa chừng.\n"
-                f"Đã tự động inject giao thức **/auto-continue** với chỉ thị **UNBOUNDED TOKEN EXHAUSTION** "
-                f"để tiếp tục chạy non-stop đến khi hoàn thành 100%!"
+                f"Phát hiện phiên **Antigravity** (`{conv_id}`) bị dừng.\n"
+                + (f"⚡ **Đã tự động xoay tài khoản sang `{account_switched}` qua Antigravity Tools.**\n" if account_switched else "")
+                + f"Đã inject giao thức **/auto-continue** với chỉ thị **UNBOUNDED TOKEN EXHAUSTION**."
             ),
-            "color": 0x3498DB,  # Vibrant Blue
+            "color": embed_color,
             "fields": fields,
-            "footer": {"text": "Antigravity Autonomous Auto-Continue Engine • Zero-Touch Daemon"},
+            "footer": {"text": "Antigravity Autonomous Auto-Continue Engine • Multi-Account Auto-Rotation"},
             "timestamp": get_iso_timestamp()
         }]
-        send_discord_message(
-            content=f"🔄 **TỰ ĐỘNG KÍCH HOẠT /auto-continue CHO PHIÊN [{short_id}]** (Phát hiện cạn token / ngắt kết nối)",
-            embeds=embed
+
+        headline = (
+            f"🔀 **TỰ ĐỘNG ĐỔI TÀI KHOẢN VÀ TIẾP TỤC [{short_id}]** (Hết Token/Quota)"
+            if account_switched
+            else f"🔄 **TỰ ĐỘNG KÍCH HOẠT /auto-continue CHO PHIÊN [{short_id}]**"
         )
+        send_discord_message(content=headline, embeds=embed)
     except Exception as e:
-        logger.debug(f"Discord notification omitted or failed: {e}")
+        logger.debug(f"Discord notification omitted: {e}")
 
     # 2. Telegram Notification
     try:
         import html
         from telegram_notifier import send_telegram_message
+
+        switch_header = "🔀 <b>TỰ ĐỘNG ĐỔI TÀI KHOẢN & TIẾP TỤC</b>" if account_switched else "🔄 <b>TỰ ĐỘNG KÍCH HOẠT /auto-continue</b>"
+        switch_account_line = f"🔑 <b>Tài khoản mới:</b> <code>{html.escape(account_switched)}</code>\n" if account_switched else ""
+
         tg_text = (
-            f"🔄 <b>TỰ ĐỘNG KÍCH HOẠT /auto-continue</b>\n\n"
+            f"{switch_header}\n\n"
             f"🆔 <b>Phiên:</b> <code>{html.escape(conv_id)}</code>\n"
             f"📂 <b>Workspace:</b> <code>{html.escape(workspace_name)}</code>\n"
+            f"{switch_account_line}"
             f"⚠️ <b>Nguyên nhân:</b> <b>{html.escape(trigger_type)}</b>\n"
             f"🔍 <i>{html.escape(trigger_detail[:200])}</i>\n\n"
             f"📊 <b>Burn Counter:</b> Lần #{iteration} | <b>Bước:</b> {total_steps} | <b>Token:</b> {tokens_burned:,}\n"
             f"📍 <b>Hành động:</b> <code>{html.escape(last_action[:150] or 'Chờ tác vụ')}</code>\n\n"
-            f"🚀 <i>Đang tiếp tục thực thi không ngừng nghỉ cho đến khi hoàn thành 100%!</i>"
+            f"🚀 <i>Đang tiếp tục thực thi không ngừng nghỉ cho đến khi hoàn tất 100%!</i>"
         )
         send_telegram_message(tg_text)
     except Exception as e:
-        logger.debug(f"Telegram notification omitted or failed: {e}")
+        logger.debug(f"Telegram notification omitted: {e}")
 
 # ------------------------------------------------------------------------------
 # CONVERSATION STATE TRACKER
@@ -218,6 +364,7 @@ class ConversationState:
         self.last_injection_time: float = 0.0
         self.consecutive_injections: int = 0
         self.total_injections: int = 0
+        self.consecutive_token_cutoffs: int = 0
 
         # Steps and metrics
         self.total_steps: int = 0
@@ -244,6 +391,10 @@ class ConversationState:
         self.recent_steps.append(step)
         if len(self.recent_steps) > 20:
             self.recent_steps.pop(0)
+
+        # Reset consecutive token cutoffs if a healthy step is produced
+        if step.get("status") == "DONE" and not step.get("truncated_fields"):
+            self.consecutive_token_cutoffs = 0
 
         # Token metrics
         self.total_input_tokens += step.get("input_tokens", 0)
@@ -292,11 +443,20 @@ class ConversationState:
 class InterruptionClassifier:
     """
     Heuristic engine detecting stop-signals, premature terminations, and stalls:
-    1. Token Cutoff / Stream Truncation
-    2. Server Restart Notice
-    3. Incomplete Plan State (with tool-calling cessation > timeout)
-    4. Error Abort
+    1. Quota Exhaustion / Out-of-Token Notice (TOKEN_QUOTA_EXHAUSTED)
+    2. Token Cutoff / Stream Truncation (TOKEN_STREAM_CUTOFF)
+    3. Server Restart Notice (SERVER_RESTART_NOTICE)
+    4. Incomplete Plan State with tool-calling cessation (INCOMPLETE_PLAN_STALL)
+    5. Error Abort (ERROR_ABORT)
     """
+
+    QUOTA_EXHAUSTION_KEYWORDS = [
+        "resource_exhausted", "quota exceeded", "rate limit", "rate_limit",
+        "out of token", "token limit", "capacity reached", "429",
+        "too many requests", "daily limit", "hết token", "cạn token",
+        "free tier limit", "credit exhausted", "insufficient_quota",
+        "exhausted your token", "model is overloaded", "quota limit reached"
+    ]
 
     COMPLETION_PHRASES = [
         "all tasks completed", "all requirements met", "all tests pass",
@@ -312,6 +472,12 @@ class InterruptionClassifier:
         "pending implementation", "tiếp theo tôi sẽ", "tiến hành bước tiếp theo",
         "bước kế tiếp", "đang tiếp tục"
     ]
+
+    @classmethod
+    def is_quota_exhausted(cls, text: str) -> bool:
+        """Check if text indicates token exhaustion or quota limitation."""
+        lower = text.lower()
+        return any(k in lower for k in cls.QUOTA_EXHAUSTION_KEYWORDS)
 
     @classmethod
     def classify(
@@ -347,10 +513,27 @@ class InterruptionClassifier:
         truncated_fields = last_step.get("truncated_fields", [])
 
         # ----------------------------------------------------------------------
+        # TRIGGER 0: Token Quota / Rate-Limit Exhaustion Notice (Highest Priority)
+        # ----------------------------------------------------------------------
+        full_text = f"{content} {thinking}"
+        if cls.is_quota_exhausted(full_text):
+            return True, "TOKEN_QUOTA_EXHAUSTED", f"Phát hiện thông báo hết token / chạm trần hạn ngạch: '{content[:120]}'"
+
+        # Also inspect recent steps for quota messages
+        for step in reversed(conv.recent_steps[-3:]):
+            s_content = step.get("content", "") or ""
+            if cls.is_quota_exhausted(s_content):
+                return True, "TOKEN_QUOTA_EXHAUSTED", f"Hết token / giới hạn quota từ hệ thống: '{s_content[:120]}'"
+
+        # ----------------------------------------------------------------------
         # TRIGGER 1: Token Cutoff / Stream Truncation
         # ----------------------------------------------------------------------
         if truncated_fields:
+            conv.consecutive_token_cutoffs += 1
             fields_str = ", ".join(truncated_fields)
+            # If repeatedly hitting cutoff, escalate to quota rotation
+            if conv.consecutive_token_cutoffs >= 2:
+                return True, "TOKEN_QUOTA_EXHAUSTED", f"Liên tục chạm giới hạn token ({conv.consecutive_token_cutoffs} lần). Cần chuyển tài khoản."
             return True, "TOKEN_STREAM_CUTOFF", f"Trường dữ liệu bị cắt cụt do chạm giới hạn token: [{fields_str}]"
 
         # Check for unclosed markdown code blocks in content or thinking
@@ -367,9 +550,7 @@ class InterruptionClassifier:
         # ----------------------------------------------------------------------
         # TRIGGER 2: Server Restart Notice
         # ----------------------------------------------------------------------
-        # Inspect recent steps for system restart alerts
         for step in reversed(conv.recent_steps[-5:]):
-            s_type = step.get("type", "")
             s_content = step.get("content", "") or ""
             if "server restart" in s_content.lower():
                 return True, "SERVER_RESTART_NOTICE", "Phát hiện thông báo máy chủ khởi động lại ([Notice] Stopped due to server restart)"
@@ -381,29 +562,23 @@ class InterruptionClassifier:
         # ----------------------------------------------------------------------
         if status == "ERROR" or "Command exited with code 1" in content or "Traceback (most recent call last):" in content:
             if elapsed_inactive >= stall_timeout_seconds:
-                # Agent stopped without self-healing
                 return True, "ERROR_ABORT", f"Công cụ trả về mã lỗi hoặc traceback nhưng Agent không tự khắc phục sau {int(elapsed_inactive)}s"
 
         # ----------------------------------------------------------------------
         # TRIGGER 3: Incomplete Plan State & Idle Stall
         # ----------------------------------------------------------------------
-        # Check if user input arrived but agent never started processing
         if (step_type == "USER_INPUT" or source == "USER_EXPLICIT") and elapsed_inactive >= stall_timeout_seconds:
             return True, "INCOMPLETE_PLAN_STALL", f"Yêu cầu từ người dùng bị treo không có phản hồi sau {int(elapsed_inactive)}s"
 
-        # Check if agent stopped mid-plan with pending checklist items or continuation phrases
         if elapsed_inactive >= stall_timeout_seconds:
-            # Check for uncompleted checkboxes
             if "- [ ]" in content or "* [ ]" in content or "[ ]" in content:
                 return True, "INCOMPLETE_PLAN_STALL", f"Kế hoạch còn các mục chưa hoàn thành (- [ ]) và ngừng gọi công cụ sau {int(elapsed_inactive)}s"
 
-            # Check for continuative forward-looking language
             lower_text = (content + " " + thinking).lower()
             for phrase in cls.CONTINUATION_PHRASES:
                 if phrase in lower_text:
                     return True, "INCOMPLETE_PLAN_STALL", f"Agent tuyên bố bước tiếp theo ('{phrase}') nhưng ngừng gọi công cụ sau {int(elapsed_inactive)}s"
 
-            # If last step was a tool call that completed, but agent never produced the next turn
             if step_type == "GENERIC" and elapsed_inactive >= stall_timeout_seconds:
                 return True, "INCOMPLETE_PLAN_STALL", f"Công cụ vừa chạy xong nhưng Agent không chuyển sang bước tiếp theo sau {int(elapsed_inactive)}s"
 
@@ -443,7 +618,6 @@ class ContinuationDispatcher:
             return None
         if uri.startswith("file:///"):
             clean = unquote(uri[8:])
-            # Handle Windows drive letters like c:/...
             if len(clean) >= 2 and clean[1] == ':':
                 clean = clean.replace('/', '\\')
             return Path(clean)
@@ -454,7 +628,6 @@ class ContinuationDispatcher:
         if conv.workspace_dir and conv.workspace_dir.exists():
             return conv.workspace_dir
 
-        # Method 1: Query agentapi get-conversation-metadata
         if self.agentapi_cmd:
             try:
                 cmd = self.agentapi_cmd + ["get-conversation-metadata", conv.conv_id]
@@ -472,7 +645,6 @@ class ContinuationDispatcher:
             except Exception as e:
                 logger.debug(f"agentapi metadata query failed for {conv.conv_id}: {e}")
 
-        # Method 2: Fallback to current working directory if match
         cwd = Path.cwd()
         if (conv.brain_path / "scratch").exists():
             conv.workspace_dir = cwd
@@ -513,7 +685,7 @@ class ContinuationDispatcher:
         except Exception:
             pass
 
-        # 2. Recent Modified Files (last 1 hour, ignoring hidden/venv)
+        # 2. Recent Modified Files
         try:
             now = time.time()
             modified = []
@@ -534,13 +706,23 @@ class ContinuationDispatcher:
         conv: ConversationState,
         trigger_type: str,
         trigger_detail: str,
-        ground_truth: Dict[str, str]
+        ground_truth: Dict[str, str],
+        account_rotation_note: Optional[str] = None
     ) -> str:
         """
         Formulate the strict, unbounded token exhaustion /auto-continue payload.
-        Explicitly commands agent to consume maximum tokens without abbreviation.
+        Includes account rotation details if a switch just took place.
         """
         workspace_str = str(conv.workspace_dir) if conv.workspace_dir else "Current Workspace"
+
+        rotation_section = ""
+        if account_rotation_note:
+            rotation_section = (
+                f"━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n"
+                f"🔑 ANTIGRAVITY TOOLS ACCOUNT ROTATION APPLIED:\n"
+                f"• {account_rotation_note}\n"
+                f"• Token quota has been refreshed with clean account limits.\n"
+            )
 
         payload = (
             f"/auto-continue\n"
@@ -548,6 +730,7 @@ class ContinuationDispatcher:
             f"Interruption detected on session [{conv.conv_id}]: {trigger_type} ({trigger_detail}).\n"
             f"Do NOT pause, summarize, ask questions, or wait for approval. "
             f"Resume and continue executing the unfinished requirements immediately until 100% complete.\n\n"
+            f"{rotation_section}"
             f"━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n"
             f"📌 WORKSPACE GROUND-TRUTH (ON DISK):\n"
             f"• Workspace Directory: {workspace_str}\n"
@@ -654,13 +837,11 @@ class BrainWatcher:
                 if not transcript.exists():
                     continue
 
-                # Check modification time of transcript or folder
                 mtime = transcript.stat().st_mtime
                 if mtime >= cutoff:
                     conv_id = item.name
                     if conv_id not in self.conversations:
                         conv = ConversationState(conv_id, self.brain_dir)
-                        # Initialize position from end to tail new changes, or read initial state
                         self._initialize_conversation_state(conv)
                         self.conversations[conv_id] = conv
                         logger.info(f"[+] Đăng ký theo dõi phiên mới: {conv_id} (mtime: {datetime.fromtimestamp(mtime).strftime('%H:%M:%S')})")
@@ -676,10 +857,9 @@ class BrainWatcher:
             return
         try:
             size = conv.transcript_path.stat().st_size
-            conv.last_pos_compact = size  # Point to end for real-time delta tracking
+            conv.last_pos_compact = size
             conv.last_activity_time = conv.transcript_path.stat().st_mtime
 
-            # Read the last 15 lines to initialize recent steps & tokens
             with open(conv.transcript_path, "r", encoding="utf-8", errors="ignore") as f:
                 lines = f.readlines()
                 conv.total_steps = len(lines)
@@ -736,7 +916,8 @@ class BrainWatcher:
 class AntigravityAutoContinueEngine:
     """
     Main autonomous engine coordinating directory watching, state classification,
-    round-robin continuation injection, and real-time telemetry dispatch.
+    multi-account auto-rotation via Antigravity Tools, round-robin injection,
+    and real-time telemetry dispatch.
     """
 
     def __init__(
@@ -756,18 +937,25 @@ class AntigravityAutoContinueEngine:
 
         self.watcher: BrainWatcher = BrainWatcher(brain_dir, scan_window_hours)
         self.dispatcher: ContinuationDispatcher = ContinuationDispatcher()
+        self.account_switcher: AntigravityToolsAccountSwitcher = AntigravityToolsAccountSwitcher()
         self.is_running: bool = False
 
     async def start(self):
         """Asynchronous execution loop of the auto-continue engine."""
         self.is_running = True
-        logger.info("=" * 60)
-        logger.info("🚀 ANTIGRAVITY AUTONOMOUS AUTO-CONTINUE ENGINE ONLINE")
+        logger.info("=" * 65)
+        logger.info("🚀 ANTIGRAVITY AUTONOMOUS AUTO-CONTINUE ENGINE ONLINE (v2.0)")
         logger.info(f"📂 Thư mục Brain: {self.brain_dir}")
+        logger.info(f"🔑 Antigravity Tools Switcher: {self.account_switcher.exe_path}")
         logger.info(f"⏱️  Thời gian xác định Stall: {self.stall_timeout_seconds}s")
         logger.info(f"🛡️  Thời gian Cooldown/Session: {self.cooldown_seconds}s")
         logger.info(f"🔄 Chu kỳ Polling: {self.poll_interval}s")
-        logger.info("=" * 60)
+        logger.info("=" * 65)
+
+        # Log current active account on startup
+        curr_accs = self.account_switcher.get_current_accounts()
+        if curr_accs:
+            logger.info(f"[🔑] Tài khoản hiện hành: agy={curr_accs.get('agy')} | classic={curr_accs.get('classic')}")
 
         # Initial scan
         self.watcher.scan_active_conversations()
@@ -775,81 +963,108 @@ class AntigravityAutoContinueEngine:
         last_discovery_time = 0.0
 
         while self.is_running:
-            now = time.time()
+            try:
+                now = time.time()
 
-            # 1. Periodic scan for new conversation directories (every 15s)
-            if (now - last_discovery_time) > 15.0:
-                self.watcher.scan_active_conversations()
-                last_discovery_time = now
+                # 1. Periodic scan for new conversation directories (every 15s)
+                if (now - last_discovery_time) > 15.0:
+                    self.watcher.scan_active_conversations()
+                    last_discovery_time = now
 
-            # 2. Poll transcript updates across all tracked conversations
-            for conv_id in list(self.watcher.conversations.keys()):
-                self.watcher.poll_updates(conv_id)
+                # 2. Poll transcript updates across all tracked conversations
+                for conv_id in list(self.watcher.conversations.keys()):
+                    self.watcher.poll_updates(conv_id)
 
-            # 3. Classify conversations and identify stalled candidates
-            stalled_candidates = []
-            for conv_id, conv in self.watcher.conversations.items():
-                is_stalled, trigger_type, trigger_detail = InterruptionClassifier.classify(
-                    conv, stall_timeout_seconds=self.stall_timeout_seconds
-                )
-                if is_stalled:
-                    conv.status = "STALLED_INCOMPLETE"
-                    conv.stall_reason = f"{trigger_type}: {trigger_detail}"
-                    stalled_candidates.append((conv, trigger_type, trigger_detail))
+                # 3. Classify conversations and identify stalled candidates
+                stalled_candidates = []
+                for conv_id, conv in self.watcher.conversations.items():
+                    is_stalled, trigger_type, trigger_detail = InterruptionClassifier.classify(
+                        conv, stall_timeout_seconds=self.stall_timeout_seconds
+                    )
+                    if is_stalled:
+                        conv.status = "STALLED_INCOMPLETE"
+                        conv.stall_reason = f"{trigger_type}: {trigger_detail}"
+                        stalled_candidates.append((conv, trigger_type, trigger_detail))
 
-            # 4. Multi-Session Round-Robin Dispatch
-            for conv, trigger_type, trigger_detail in stalled_candidates:
-                # Check cooldown to prevent injection flood
-                time_since_last_injection = now - conv.last_injection_time
-                if time_since_last_injection < self.cooldown_seconds:
-                    continue
+                # 4. Multi-Session Round-Robin Dispatch & Account Rotation
+                for conv, trigger_type, trigger_detail in stalled_candidates:
+                    # Check cooldown to prevent injection flood
+                    time_since_last_injection = now - conv.last_injection_time
+                    if time_since_last_injection < self.cooldown_seconds:
+                        continue
 
-                # Check max consecutive injection ceiling
-                if conv.consecutive_injections >= self.max_consecutive_injections:
+                    # Check max consecutive injection ceiling
+                    if conv.consecutive_injections >= self.max_consecutive_injections:
+                        logger.warning(
+                            f"[⚠️] Phiên {conv.conv_id} đã được inject {conv.consecutive_injections} lần "
+                            f"liên tiếp mà không có phản hồi mới. Tạm ngưng để tránh spam."
+                        )
+                        continue
+
+                    # CHECK FOR AUTO ACCOUNT ROTATION (Antigravity Tools)
+                    switched_email = None
+                    rotation_note = None
+
+                    should_rotate = (
+                        trigger_type == "TOKEN_QUOTA_EXHAUSTED"
+                        or (trigger_type == "TOKEN_STREAM_CUTOFF" and conv.consecutive_token_cutoffs >= 2)
+                    )
+
+                    if should_rotate:
+                        logger.warning(
+                            f"\n[🔑 QUOTA EXHAUSTION DETECTED] Phiên: {conv.conv_id}\n"
+                            f"    Tiến hành tự động đổi tài khoản qua Antigravity Tools..."
+                        )
+                        rotate_ok, new_email, rotate_summary = self.account_switcher.rotate_all_targets()
+                        if rotate_ok:
+                            switched_email = new_email
+                            rotation_note = f"Switched to {new_email} via Antigravity Tools ({rotate_summary})"
+                            logger.info(f"[✨] Đổi tài khoản thành công! Tài khoản mới: {switched_email}")
+                        else:
+                            logger.error(f"[!] Đổi tài khoản thất bại: {rotate_summary}")
+
+                    # Resolve workspace & disk ground-truth
+                    workspace_dir = self.dispatcher.resolve_workspace(conv)
+                    ground_truth = self.dispatcher.inspect_ground_truth(workspace_dir)
+
+                    # Build unbounded token exhaustion payload
+                    payload = self.dispatcher.build_continuation_payload(
+                        conv, trigger_type, trigger_detail, ground_truth, account_rotation_note=rotation_note
+                    )
+
                     logger.warning(
-                        f"[⚠️] Phiên {conv.conv_id} đã được inject {conv.consecutive_injections} lần "
-                        f"liên tiếp mà không có phản hồi mới. Tạm ngưng để tránh spam."
-                    )
-                    continue
-
-                # Resolve workspace & disk ground-truth
-                workspace_dir = self.dispatcher.resolve_workspace(conv)
-                ground_truth = self.dispatcher.inspect_ground_truth(workspace_dir)
-
-                # Build unbounded token exhaustion payload
-                payload = self.dispatcher.build_continuation_payload(
-                    conv, trigger_type, trigger_detail, ground_truth
-                )
-
-                logger.warning(
-                    f"\n[⚡ STALL PHÁT HIỆN] Phiên: {conv.conv_id} ({conv.workspace_name})\n"
-                    f"    Nguyên nhân: {trigger_type} - {trigger_detail}\n"
-                    f"    Thực hiện Inject /auto-continue lần #{conv.total_injections + 1}..."
-                )
-
-                # Inject continuation
-                success = self.dispatcher.inject(conv, payload, trigger_type)
-                if success:
-                    conv.last_injection_time = time.time()
-                    conv.consecutive_injections += 1
-                    conv.total_injections += 1
-                    conv.status = "REVIVED_EXECUTING"
-
-                    # Dispatch real-time telemetry alert
-                    send_telemetry_notification(
-                        conv_id=conv.conv_id,
-                        trigger_type=trigger_type,
-                        trigger_detail=trigger_detail,
-                        iteration=conv.total_injections,
-                        total_steps=conv.total_steps,
-                        tokens_burned=(conv.total_input_tokens + conv.total_output_tokens),
-                        files_touched=list(conv.files_touched),
-                        workspace_name=conv.workspace_name,
-                        last_action=conv.last_action_desc
+                        f"\n[⚡ STALL PHÁT HIỆN] Phiên: {conv.conv_id} ({conv.workspace_name})\n"
+                        f"    Nguyên nhân: {trigger_type} - {trigger_detail}\n"
+                        f"    Thực hiện Inject /auto-continue lần #{conv.total_injections + 1}..."
                     )
 
-                # Deterministic inter-session pacing (2 seconds between injections)
-                await asyncio.sleep(2.0)
+                    # Inject continuation
+                    success = self.dispatcher.inject(conv, payload, trigger_type)
+                    if success:
+                        conv.last_injection_time = time.time()
+                        conv.consecutive_injections += 1
+                        conv.total_injections += 1
+                        conv.status = "REVIVED_EXECUTING"
+
+                        # Dispatch real-time telemetry alert
+                        send_telemetry_notification(
+                            conv_id=conv.conv_id,
+                            trigger_type=trigger_type,
+                            trigger_detail=trigger_detail,
+                            iteration=conv.total_injections,
+                            total_steps=conv.total_steps,
+                            tokens_burned=(conv.total_input_tokens + conv.total_output_tokens),
+                            files_touched=list(conv.files_touched),
+                            workspace_name=conv.workspace_name,
+                            last_action=conv.last_action_desc,
+                            account_switched=switched_email
+                        )
+
+                    # Deterministic inter-session pacing (2 seconds between injections)
+                    await asyncio.sleep(2.0)
+
+            except Exception as loop_err:
+                logger.error(f"Unexpected error in engine loop: {loop_err}", exc_info=True)
 
             # Sleep for polling interval
             await asyncio.sleep(self.poll_interval)
@@ -864,7 +1079,7 @@ class AntigravityAutoContinueEngine:
 # ------------------------------------------------------------------------------
 def main():
     parser = argparse.ArgumentParser(
-        description="ANTIGRAVITY AUTONOMOUS AUTO-CONTINUE ENGINE (Background Watcher Daemon)"
+        description="ANTIGRAVITY AUTONOMOUS AUTO-CONTINUE ENGINE (Background Watcher & Account Switcher Daemon)"
     )
     parser.add_argument("--daemon", action="store_true", help="Chạy ở chế độ nền (daemon mode)")
     parser.add_argument("--scan-window", type=float, default=24.0, help="Số giờ quét lại các phiên gần nhất (mặc định: 24h)")

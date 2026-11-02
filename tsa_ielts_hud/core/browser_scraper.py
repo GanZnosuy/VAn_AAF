@@ -40,8 +40,9 @@ class BrowserScraper:
         """Fast non-blocking check if CDP port is listening before launching playwright."""
         try:
             import urllib.request
-            version_url = cdp_url.rstrip("/") + "/json/version"
-            with urllib.request.urlopen(version_url, timeout=0.6) as resp:
+            norm_url = cdp_url.replace("localhost", "127.0.0.1")
+            version_url = norm_url.rstrip("/") + "/json/version"
+            with urllib.request.urlopen(version_url, timeout=0.8) as resp:
                 return resp.status == 200
         except Exception:
             return False
@@ -95,8 +96,9 @@ class BrowserScraper:
                 return True
 
             self._playwright = await async_playwright().start()
+            effective_url = self.cdp_url.replace("localhost", "127.0.0.1")
             self._browser = await self._playwright.chromium.connect_over_cdp(
-                self.cdp_url,
+                effective_url,
                 timeout=10000,
             )
             logger.info("Connected to browser over CDP at %s", self.cdp_url)

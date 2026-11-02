@@ -65,6 +65,7 @@ research_skills/
 scan_results.json
 tsa_casio_images/
 
+scratch/
 logs/
 *.bak
 *.lock

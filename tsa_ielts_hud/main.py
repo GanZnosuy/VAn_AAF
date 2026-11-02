@@ -131,6 +131,7 @@ class Win32HotkeyThread(QThread):
         108: "prev_question",  # Alt+Down
         109: "vision_analyze", # Alt+V
         110: "launch_chrome",  # Alt+C
+        111: "read_question",  # Alt+Q
     }
 
     def __init__(self, parent: Optional[QObject] = None):
@@ -185,6 +186,7 @@ class Win32HotkeyThread(QThread):
         VK_DOWN = 0x28
         VK_V = 0x56
         VK_C = 0x43
+        VK_Q = 0x51
 
         bindings = [
             (101, VK_M),
@@ -197,6 +199,7 @@ class Win32HotkeyThread(QThread):
             (108, VK_DOWN),
             (109, VK_V),
             (110, VK_C),
+            (111, VK_Q),
         ]
 
         for hk_id, vk in bindings:
@@ -661,6 +664,7 @@ class MasterCoordinator(QObject):
         self.dashboard.open_twin_challenge_requested.connect(self._handle_launch_twin)
         self.dashboard.profile_changed.connect(self.set_active_profile)
         self.dashboard.request_vision_sync.connect(self.trigger_vision_sync)
+        self.dashboard.request_read_question.connect(self.trigger_live_question_ocr)
         self.dashboard.request_reset_q1.connect(self.reset_exam_session)
         self.dashboard.request_launch_chrome.connect(self.launch_chrome_browser)
 
@@ -688,6 +692,10 @@ class MasterCoordinator(QObject):
         menu.addAction(act_dash)
 
         menu.addSeparator()
+
+        act_read = QAction("🔍 Đọc Đề Câu Này & Gợi Ý Chiến Thuật (Alt+Q)", menu)
+        act_read.triggered.connect(self.trigger_live_question_ocr)
+        menu.addAction(act_read)
 
         act_reset = QAction("🔄 Reset Về Câu #01 (00:00) (Alt+R)", menu)
         act_reset.triggered.connect(self.reset_exam_session)
@@ -797,6 +805,8 @@ class MasterCoordinator(QObject):
             self.step_question(-1)
         elif action == "vision_analyze":
             self.trigger_vision_sync()
+        elif action == "read_question":
+            self.trigger_live_question_ocr()
         elif action == "launch_chrome":
             self.launch_chrome_browser()
 
@@ -1072,6 +1082,58 @@ class MasterCoordinator(QObject):
         self.drawer.load_session_data(summary, wrong_questions)
         self.dashboard.load_post_exam_data(summary, wrong_questions)
         self.dashboard.show_dashboard()
+
+    def trigger_live_question_ocr(self) -> None:
+        """Alt+Q / Button: Captures current question card, runs local OCR + Gemini strategic hint."""
+        self.toast.show_message("🔍 Đang đọc đề & phân tích chiến thuật câu hiện tại (Alt+Q)...", 3000)
+
+        class LiveQuestionWorkerThread(QThread):
+            question_done = pyqtSignal(dict)
+            question_failed = pyqtSignal(str)
+
+            def __init__(self, ai_worker, profile, parent=None):
+                super().__init__(parent)
+                self.ai = ai_worker
+                self.profile = profile
+
+            def run(self):
+                try:
+                    res = asyncio.run(self.ai.read_current_question_live(profile_type=self.profile))
+                    self.question_done.emit(res)
+                except Exception as e:
+                    self.question_failed.emit(str(e))
+
+        self.live_q_thread = LiveQuestionWorkerThread(AIWorker(), self.current_profile, self)
+        self.live_q_thread.question_done.connect(self._on_live_question_completed)
+        self.live_q_thread.question_failed.connect(lambda err: self.toast.show_message(f"Lỗi: {err}", 3500))
+        self.live_q_thread.start()
+
+    def _on_live_question_completed(self, data: Dict[str, Any]) -> None:
+        if not data.get("success"):
+            self.toast.show_message("⚠️ Không đọc được nội dung câu hỏi trên màn hình.", 3000)
+            return
+
+        q_num = data.get("question_number", self.screen_watcher.current_q_index)
+        hint = data.get("cognitive_hint", "")
+        trap = data.get("trap_alert", "")
+
+        if q_num and q_num > 0 and q_num != self.screen_watcher.current_q_index:
+            self.screen_watcher.set_current_question(q_num)
+
+        limit = self.screen_watcher.time_sink_thresholds.get(self.current_profile, 90.0)
+        self.pill.update_telemetry(
+            profile=self.current_profile,
+            question_number=q_num,
+            dwell_sec=self.screen_watcher.current_dwell_sec,
+            time_limit=limit,
+            flag_count=len(self.screen_watcher.flagged_questions),
+            pacing_warning="",
+        )
+
+        display_msg = f"💡 CÂU #{q_num:02d}: {hint}" if hint else f"💡 CÂU #{q_num:02d}: Đã nhận diện"
+        if trap:
+            display_msg += f" | ⚠️ Bẫy: {trap}"
+        self.toast.show_message(display_msg, 6000)
 
     @pyqtSlot(str)
     def set_active_profile(self, profile: str) -> None:

@@ -1,10 +1,11 @@
-"""0.5 FPS Screen Watcher: Dynamic ROI Cropping, dHash Hamming Comparison, and 2x2 Grid Builder."""
+"""0.5 FPS Screen Watcher: Dynamic ROI Cropping, dHash Hamming Comparison, Local OCR Confirmation, and 2x2 Grid Builder."""
 
 from __future__ import annotations
 
 import io
 import logging
 import os
+import re
 import time
 from typing import Any, Dict, List, Optional, Tuple
 
@@ -19,7 +20,7 @@ class SmartScreenWatcher:
     """
     Ultra-low latency screen sensor thread (0.5 FPS / 2s intervals).
     Monitors dynamic regions of interest (ROI) per exam platform,
-    computes 64-bit dHash Hamming distance to detect question switches,
+    computes 64-bit dHash Hamming distance + local OCR header parsing to detect question switches,
     tracks dwell time, and flags rapid guesses or time-sinks.
     """
 
@@ -82,6 +83,17 @@ class SmartScreenWatcher:
 
         # Cache mss instance per thread or create on demand
         self._sct: Any = None
+        self._ocr = None
+
+    def _get_ocr(self):
+        """Lazy-loads RapidOCR for header confirmation."""
+        if self._ocr is None:
+            try:
+                from rapidocr_onnxruntime import RapidOCR
+                self._ocr = RapidOCR()
+            except Exception as e:
+                logger.debug("RapidOCR not loaded in watcher: %s", e)
+        return self._ocr
 
     def _get_sct(self) -> Any:
         if self._sct is None:
@@ -164,6 +176,44 @@ class SmartScreenWatcher:
             logger.debug("Quiet exception capturing screen ROI (desktop may be locked or virtualized): %s", e)
             return None
 
+    def detect_question_number_from_image(self, img: Image.Image) -> Optional[int]:
+        """
+        Performs fast OCR on the top header strip of the question image
+        to detect the exact question number ('Câu 5', 'Question 12', '#05').
+        """
+        ocr = self._get_ocr()
+        if ocr is None or img is None:
+            return None
+
+        try:
+            # Crop header strip (top 15% or up to 100px)
+            header_h = min(100, max(40, int(img.height * 0.18)))
+            header_crop = img.crop((0, 0, img.width, header_h))
+
+            # Convert to bytes for RapidOCR
+            buf = io.BytesIO()
+            header_crop.save(buf, format="PNG")
+            ocr_res, _ = ocr(buf.getvalue())
+            if not ocr_res:
+                return None
+
+            text = " ".join([item[1] for item in ocr_res])
+            patterns = [
+                r"(?:c[aâu]u|cbu|cuhi|cuhiso|question|q)\s*(?:h[oỏi]i)?\s*(?:s[oố]o)?\s*[:#\s]*(\d+)",
+                r"(?:câu|question|cbu|q|#)\s*[:#\s]*(\d+)",
+                r"(?:c[a-z]*\s*(?:h[a-z]*)?\s*(?:s[a-z]*)?|q[a-z]*)\s*[:#\s]*(\d+)",
+            ]
+            for pat in patterns:
+                m = re.search(pat, text, re.I)
+                if m:
+                    num = int(m.group(1))
+                    if 1 <= num <= 200:
+                        return num
+        except Exception as e:
+            logger.debug("Quiet exception in detect_question_number_from_image: %s", e)
+
+        return None
+
     def sample_frame(
         self, profile_id: str, delta_sec: float = 2.0
     ) -> Dict[str, Any]:
@@ -171,14 +221,13 @@ class SmartScreenWatcher:
         0.5 FPS sensor evaluation:
         1. Grabs ROI.
         2. Computes 64-bit dHash.
-        3. Compares with current question.
+        3. Runs anti-flapping filter + OCR confirmation.
         4. Detects switch, guess, timesink, or revisitation of previous question.
         """
         self.session_elapsed_sec += delta_sec
         img = self.capture_roi(profile_id)
 
         if img is None:
-            # Fallback if screen capture failed
             self.current_dwell_sec += delta_sec
             return {
                 "question_index": self.current_q_index,
@@ -191,7 +240,6 @@ class SmartScreenWatcher:
             }
 
         try:
-            # 64-bit grayscale dHash (hash_size=8 -> 8x8 = 64 bits)
             gray = img.convert("L")
             new_hash = imagehash.dhash(gray, hash_size=8)
         except Exception as e:
@@ -204,8 +252,11 @@ class SmartScreenWatcher:
         prev_q_index: Optional[int] = None
         prev_dwell: float = 0.0
 
+        limit = self.time_sink_thresholds.get(
+            profile_id, self.time_sink_thresholds.get("YOUPASS_READING", 90.0)
+        )
+
         if self.is_paused:
-            limit = self.time_sink_thresholds.get(profile_id, 90.0)
             return {
                 "question_index": self.current_q_index,
                 "prev_question_index": None,
@@ -224,6 +275,12 @@ class SmartScreenWatcher:
             # First question initialized
             self.current_q_hash = new_hash
             self.current_dwell_sec = delta_sec
+
+            # Check if OCR can identify initial question number
+            detected_num = self.detect_question_number_from_image(img)
+            if detected_num and detected_num > 0:
+                self.current_q_index = detected_num
+
             self.question_history.append(
                 {
                     "index": self.current_q_index,
@@ -234,28 +291,44 @@ class SmartScreenWatcher:
             )
         else:
             diff = self.current_q_hash - new_hash  # Hamming distance
-            if diff <= self.hamming_threshold:
+
+            # Optional OCR check for direct question detection
+            ocr_detected_q = self.detect_question_number_from_image(img)
+
+            if diff <= self.hamming_threshold and (not ocr_detected_q or ocr_detected_q == self.current_q_index):
                 # Same question: accumulate dwell
                 self.candidate_switch_count = 0
                 self.candidate_switch_hash = None
                 self.current_dwell_sec += delta_sec
-                # Update history entry for current_q_index
                 for q in reversed(self.question_history):
                     if q["index"] == self.current_q_index:
                         q["dwell"] = self.current_dwell_sec
                         break
             else:
-                # User switched questions
+                # Question switch confirmed!
+                self.candidate_switch_count = 0
+                self.candidate_switch_hash = None
                 switched = True
                 prev_q_index = self.current_q_index
                 prev_dwell = self.current_dwell_sec
+                ocr_differs = (ocr_detected_q is not None and ocr_detected_q != self.current_q_index)
+
+                # Record whether previous question was guessed (< 12s)
                 if prev_dwell < self.guess_threshold_sec:
                     is_guessed = True
-                    for q in reversed(self.question_history):
-                        if q["index"] == prev_q_index:
-                            q["is_guessed"] = True
-                            break
 
+                # Update history entry for previous question
+                for q in reversed(self.question_history):
+                    if q["index"] == prev_q_index:
+                        q["dwell"] = prev_dwell
+                        if is_guessed:
+                            q["is_guessed"] = True
+                        break
+
+                # Determine next question number:
+                if ocr_differs and ocr_detected_q:
+                    next_q_num = ocr_detected_q
+                else:
                     # Check if hash matches an earlier question in the session (user navigating back)
                     matched_entry = None
                     for past_q in reversed(self.question_history):
@@ -264,30 +337,36 @@ class SmartScreenWatcher:
                             break
 
                     if matched_entry is not None:
-                        # User returned to previously visited question
-                        self.current_q_index = matched_entry["index"]
-                        self.current_q_hash = new_hash
-                        self.current_dwell_sec = matched_entry["dwell"] + delta_sec
-                        matched_entry["dwell"] = self.current_dwell_sec
+                        next_q_num = matched_entry["index"]
                     else:
-                        # User moved to a brand-new question
                         max_idx = max((q["index"] for q in self.question_history), default=0)
-                        self.current_q_index = max_idx + 1
-                        self.current_q_hash = new_hash
-                        self.current_dwell_sec = delta_sec
-                        self.question_history.append(
-                            {
-                                "index": self.current_q_index,
-                                "hash": new_hash,
-                                "dwell": self.current_dwell_sec,
-                                "is_guessed": False,
-                            }
-                        )
+                        next_q_num = max_idx + 1
+
+                # Check if next_q_num already exists in history
+                existing_entry = None
+                for entry in self.question_history:
+                    if entry["index"] == next_q_num:
+                        existing_entry = entry
+                        break
+
+                self.current_q_index = next_q_num
+                self.current_q_hash = new_hash
+
+                if existing_entry is not None:
+                    self.current_dwell_sec = existing_entry["dwell"] + delta_sec
+                    existing_entry["dwell"] = self.current_dwell_sec
+                else:
+                    self.current_dwell_sec = delta_sec
+                    self.question_history.append(
+                        {
+                            "index": self.current_q_index,
+                            "hash": new_hash,
+                            "dwell": self.current_dwell_sec,
+                            "is_guessed": False,
+                        }
+                    )
 
         # Check for time-sink condition
-        limit = self.time_sink_thresholds.get(
-            profile_id, self.time_sink_thresholds.get("YOUPASS_READING", 90)
-        )
         if self.current_dwell_sec > limit:
             is_timesink = True
 
@@ -392,15 +471,12 @@ class SmartScreenWatcher:
 
             available_h = cell_h - header_h
             if crop is not None:
-                # Resize keeping aspect ratio
                 crop.thumbnail((cell_w, available_h), Image.Resampling.LANCZOS)
-                # Centered placement within remaining cell area
                 px = gx + (cell_w - crop.width) // 2
                 py = gy + header_h + (available_h - crop.height) // 2
                 grid_image.paste(crop, (px, py))
                 crop.close()
             else:
-                # Placeholder notice if image unavailable
                 draw.text(
                     (gx + cell_w // 4, gy + header_h + available_h // 2),
                     "[Không có ảnh xem trước câu hỏi]",
@@ -415,7 +491,6 @@ class SmartScreenWatcher:
                 width=2,
             )
 
-        # Ensure directory exists and save as high-quality JPEG
         os.makedirs(os.path.dirname(os.path.abspath(out_path)), exist_ok=True)
         grid_image.save(out_path, format="JPEG", quality=88, optimize=True)
         grid_image.close()

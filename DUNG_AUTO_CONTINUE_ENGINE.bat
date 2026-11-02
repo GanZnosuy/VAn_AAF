@@ -1,22 +1,22 @@
 @echo off
+setlocal
 chcp 65001 >nul
-title DỪNG ANTIGRAVITY AUTO-CONTINUE ENGINE
+title DUNG ANTIGRAVITY AUTO-CONTINUE ENGINE
 cls
 echo ===============================================================================
-echo   🛑 DỪNG ANTIGRAVITY AUTONOMOUS AUTO-CONTINUE ENGINE
+echo   DUNG ANTIGRAVITY AUTONOMOUS AUTO-CONTINUE ENGINE
 echo ===============================================================================
 echo.
 
 cd /d "c:\Users\vuong\OneDrive\Desktop\CAIDATHETTHONG"
 
-powershell -NoProfile -Command ^
-    "$procs = Get-CimInstance Win32_Process | Where-Object { $_.CommandLine -like '*antigravity_auto_continue_engine.py*' }; if ($procs) { foreach ($p in $procs) { Stop-Process -Id $p.ProcessId -Force; Write-Host ('[✓] Đã dừng tiến trình Daemon PID: ' + $p.ProcessId) -ForegroundColor Green } } else { Write-Host '[i] Không có tiến trình Auto-Continue Engine nào đang chạy.' -ForegroundColor Yellow }"
+powershell -NoProfile -ExecutionPolicy Bypass -Command "$procs = Get-CimInstance Win32_Process | Where-Object { ($_.Name -like 'python*.exe') -and ($_.CommandLine -like '*antigravity_auto_continue_engine.py*') }; if ($procs) { foreach ($p in $procs) { Stop-Process -Id $p.ProcessId -Force -ErrorAction SilentlyContinue; Write-Host ('[OK] Da dung tien trinh PID: ' + $p.ProcessId) -ForegroundColor Green } } else { Write-Host '[INFO] Khong co tien trinh Auto-Continue Engine nao dang chay.' -ForegroundColor Yellow }"
 
 if exist "logs\auto_continue_engine.pid" (
     del /f /q "logs\auto_continue_engine.pid" >nul 2>&1
 )
 
 echo.
-echo [✓] Đã hoàn tất giải phóng Mutex và dừng Daemon.
+echo [OK] Da hoan tat giai phong Mutex va dung Daemon.
 echo.
-timeout /t 3 >nul
+ping -n 3 127.0.0.1 >nul
