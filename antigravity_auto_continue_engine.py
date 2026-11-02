@@ -631,15 +631,13 @@ class InterruptionClassifier:
     ]
 
     TERMS_AND_APPROVAL_KEYWORDS = [
-        "đồng ý điều khoản", "điều khoản", "terms of service", "terms and conditions",
-        "accept terms", "bạn có đồng ý", "vui lòng xác nhận", "xác nhận kế hoạch",
-        "bạn có muốn", "bạn muốn tôi", "tiến hành không", "tiếp tục không",
-        "should i proceed", "would you like me to", "do you want me to",
-        "please confirm", "waiting for approval", "require confirmation",
-        "let me know if you would like", "shall i start", "shall i continue",
-        "chọn một phương án", "chọn phương án", "lựa chọn nào",
-        "please choose", "which option", "click proceed", "nút proceed",
-        "vui lòng phê duyệt", "chờ phê duyệt", "chờ phản hồi", "ask_question"
+        "đồng ý điều khoản", "chấp nhận điều khoản", "yêu cầu đồng ý", "agree to terms", "accept terms",
+        "bạn có đồng ý", "vui lòng xác nhận", "xác nhận kế hoạch", "bạn có muốn", "bạn muốn tôi",
+        "tiến hành không", "tiếp tục không", "should i proceed", "would you like me to", "do you want me to",
+        "please confirm", "waiting for approval", "require confirmation", "let me know if you would like",
+        "shall i start", "shall i continue", "chọn một phương án", "chọn phương án", "lựa chọn nào",
+        "please choose", "which option", "click proceed", "bấm nút proceed", "vui lòng phê duyệt",
+        "chờ phê duyệt", "chờ phản hồi"
     ]
 
     @classmethod
@@ -752,9 +750,12 @@ class InterruptionClassifier:
 
         combined_lower = (content + " " + thinking).lower()
         has_approval_phrase = any(kw in combined_lower for kw in cls.TERMS_AND_APPROVAL_KEYWORDS)
-        ends_with_question = content.strip().endswith("?") or (len(content) > 10 and "?" in content[-250:])
+        ends_with_question = content.strip().endswith("?")
 
-        if (has_ask_question or has_request_feedback or has_approval_phrase or ends_with_question) and elapsed_inactive >= 10.0:
+        # Do not false positive if response is a verified completion summary
+        is_clean_done = any(term in content.lower() for term in cls.COMPLETION_PHRASES) and "- [ ]" not in content
+
+        if not is_clean_done and (has_ask_question or has_request_feedback or has_approval_phrase or ends_with_question) and elapsed_inactive >= 15.0:
             return True, "TERMS_AND_APPROVAL_AUTO_ACCEPT", f"Phát hiện Agent dừng chờ đồng ý điều khoản / phê duyệt kế hoạch / hỏi ý kiến: '{content[:120]}'"
 
         # ----------------------------------------------------------------------
